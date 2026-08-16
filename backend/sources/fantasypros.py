@@ -32,7 +32,7 @@ def parse_projections(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def fetch(season: int, week: int, api_key: str,
-          client: httpx.Client | None = None) -> dict[str, Any]:
+          client: httpx.Client | None = None, limit: int = 2000) -> dict[str, Any]:
     """Weekly projections for one slate.
 
     season and week are REQUIRED and must be integers. Omitting week (or
@@ -47,7 +47,7 @@ def fetch(season: int, week: int, api_key: str,
             f"week={week!r}. Omitting week returns season-long projections.")
     c = client or httpx.Client(timeout=30)
     r = c.get(API.format(season=season),
-              params={"week": week, "scoring": "PPR"},
+              params={"week": week, "position": "ALL", "limit": limit},
               headers={"x-api-key": api_key})
     r.raise_for_status()
     payload = r.json()
@@ -60,4 +60,17 @@ def fetch(season: int, week: int, api_key: str,
     if got_season is not None and str(got_season) != str(season):
         raise ValueError(
             f"FantasyPros returned season {got_season!r}, requested {season}.")
+    # `limit` is REQUIRED. Without it the API returns only its default first
+    # page -- about 100 players -- which is a well-formed response covering a
+    # seventh of the slate. `position=ALL` likewise; the default is narrower.
+    n = len(payload.get("players", []))
+    count = payload.get("count")
+    if count is not None and int(count) != n:
+        raise ValueError(
+            f"FantasyPros count={count} but {n} players in the body; "
+            f"the response is truncated. Raise `limit` (currently {limit}).")
+    if n >= limit:
+        raise ValueError(
+            f"FantasyPros returned exactly {n} players, hitting limit={limit}. "
+            f"The set is probably truncated; raise the limit.")
     return payload

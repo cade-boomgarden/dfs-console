@@ -26,7 +26,7 @@ ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 
 
 def probe(season: int, week: int, api_key: str) -> None:
-    params = {"scoring": "PPR"}
+    params = {"position": "ALL", "limit": 2000}
     if week:
         params["week"] = week
     try:

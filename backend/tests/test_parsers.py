@@ -1,5 +1,7 @@
 """Golden-file parser tests against captured real API responses (15e)."""
 import json
+
+import pytest
 from pathlib import Path
 
 from backend.sources import draftkings as dk
@@ -93,3 +95,53 @@ def test_dk_status_none_string_is_normalised():
     assert "None" not in statuses, 'the string "None" must not survive parsing'
     assert None in statuses                      # healthy players
     assert statuses & {"Q", "OUT", "IR"}         # real designations preserved
+
+
+class _StubClient:
+    """Captures the request FantasyPros would receive."""
+    def __init__(self, payload):
+        self.payload, self.params = payload, None
+
+    def get(self, url, params=None, headers=None):
+        self.params = params
+        body = self.payload
+
+        class R:
+            status_code = 200
+            @staticmethod
+            def raise_for_status(): pass
+            @staticmethod
+            def json(): return body
+        return R()
+
+
+def test_fp_fetch_requests_all_positions_and_a_limit():
+    """Without `limit` the API returns only its default first page (~100
+    players) -- a well-formed response covering a seventh of the slate."""
+    payload = load("fp_projections.json")
+    stub = _StubClient(payload)
+    fp.fetch(2026, 1, "k", client=stub)
+    assert stub.params["week"] == 1
+    assert stub.params["position"] == "ALL"
+    assert stub.params["limit"] >= 1000
+
+
+def test_fp_fetch_rejects_a_truncated_response():
+    payload = dict(load("fp_projections.json"))
+    payload["count"] = "5000"                      # body has far fewer
+    with pytest.raises(ValueError, match="truncated"):
+        fp.fetch(2026, 1, "k", client=_StubClient(payload))
+
+
+def test_fp_fetch_rejects_season_long_totals():
+    payload = dict(load("fp_projections.json"))
+    payload["week"] = "0"
+    with pytest.raises(ValueError, match="season-long"):
+        fp.fetch(2026, 1, "k", client=_StubClient(payload))
+
+
+def test_fixture_projections_align_with_the_draftables_fixture():
+    """Both fixtures must be the same season/week or the join is meaningless."""
+    fpx = load("fp_projections.json")
+    assert fpx["season"] == "2026" and fpx["week"] == "1"
+    assert int(fpx["count"]) == len(fpx["players"]) > 600
