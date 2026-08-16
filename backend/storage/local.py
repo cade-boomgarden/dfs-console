@@ -1,5 +1,12 @@
-"""Filesystem blob store for dev. Swap for S3BlobStore (Cloudflare R2) on
-deploy -- container filesystems on Fly/Railway are ephemeral (section 11d)."""
+"""Filesystem blob store.
+
+This is the production store on Render: `DFS_BLOB_DIR` points at `/data/blobs`
+on a mounted persistent disk, which survives redeploys. It stops being enough
+only when a second service (an RQ worker) must read blobs the web service
+wrote — a Render disk mounts to exactly one service. At that point add an
+S3BlobStore against Cloudflare R2 behind the same `BlobStore` protocol
+(section 11d). Not before.
+"""
 from __future__ import annotations
 
 from pathlib import Path
