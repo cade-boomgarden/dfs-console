@@ -124,6 +124,14 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                 "season-long totals.")
         fp_raw = fp.fetch(int(season), int(week), settings.fantasypros_api_key)
     fp_players = fp.parse_projections(fp_raw)
+    fp_total = len(fp_players)
+    fp_with_stats = sum(1 for r in fp_players if (r.get("stats") or {}))
+    if fp_with_stats < 200:
+        raise ValueError(
+            f"FantasyPros returned only {fp_with_stats} players with stats "
+            f"(of {fp_total}). That is not enough to build a slate -- this "
+            f"week's projections are probably not published yet. Refusing to "
+            f"overwrite the pool with a near-empty projection set.")
 
     candidates = [Candidate(str(r["canonical_id"]), r["name"], r["team"], r["position"])
                   for r in dk_players.values()]
@@ -139,6 +147,8 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
             continue
         raw_key = f"{rec['name']}|{rec['team']}|{rec['position']}"
         cached = db.query(SourceMap).filter_by(source="fantasypros", raw_key=raw_key).first()
+        if not (rec.get("stats") or {}):
+            continue          # a record with no stats is not a projection
         if cached:
             stats_by_canon[cached.player_id] = rec["stats"]
             canon = db.get(PlayerCanonical, cached.player_id)
@@ -252,6 +262,7 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
 
     return {"slate_id": slate.id, "pool_version_id": pv.id,
             "pool_size": n_pool, "fp_unmatched": n_unmatched,
+        "fp_records": fp_total, "fp_with_stats": fp_with_stats,
         "no_projection_count": len(no_projection),
         "no_projection": no_projection[:40],
             "games": len(games)}
