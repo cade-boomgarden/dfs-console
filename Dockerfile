@@ -16,6 +16,6 @@ COPY alembic ./alembic
 COPY alembic.ini ./
 COPY --from=web /web/dist ./frontend/dist
 
-ENV PYTHONUNBUFFERED=1 DFS_ENV=prod
+ENV PYTHOHNPATH=/app PYTHONUNBUFFERED=1 DFS_ENV=prod
 EXPOSE 8000
 CMD ["sh", "-c", "alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

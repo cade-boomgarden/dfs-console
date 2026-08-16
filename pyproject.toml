@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "dfs"
 version = "0.1.0"
@@ -20,6 +24,9 @@ dependencies = [
     "rq>=1.16",
     "psycopg2-binary>=2.9",
 ]
+
+[tool.setuptools.packages.find]
+include = ["backend*"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
