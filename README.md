@@ -25,16 +25,18 @@ Ingest the captured fixtures for a working offline slate: on the Slates page,
 `{"fixture_dir": "backend/tests/fixtures"}`), then Simulate on the Overview
 page, then build.
 
-## Production shape
+## Production
 
-```bash
-docker compose up          # postgres + redis + api + rq worker
-alembic upgrade head       # migrations (dev uses create_all)
-```
+Deployed on **Render** as a single service — the API serves the built React
+bundle, so there is no separate frontend host and no CORS in production.
+`render.yaml` declares the web service, Postgres, and the sims disk.
+See **[DEPLOY.md](DEPLOY.md)** for the full walkthrough.
 
-Set `DFS_JOB_MODE=rq` so builds fan out to workers. Blobs use the
-`BlobStore` protocol — `LocalBlobStore` in dev; point an S3-compatible store
-(Cloudflare R2 recommended) at the same interface for deploy.
+`docker-compose.yml` runs postgres + redis + api + rq worker locally if you
+want to exercise the RQ path; the deploy does not use it. Blobs go through the
+`BlobStore` protocol — `LocalBlobStore` on a mounted disk today, an
+S3-compatible store (Cloudflare R2) when a separate worker needs to share
+them.
 
 ## Layout
 

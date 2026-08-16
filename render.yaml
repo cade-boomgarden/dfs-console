@@ -1,33 +1,39 @@
-# Render Blueprint. Same Dockerfile, same single-service shape as Railway.
-# Render dashboard -> New -> Blueprint -> point at this repo.
+# Render Blueprint. Dashboard -> New -> Blueprint -> point at this repo.
+# Validate before applying:  render blueprints validate
+# Schema: https://render.com/schema/render.yaml.json
+
 services:
   - type: web
     name: dfs-console
     runtime: docker
     dockerfilePath: ./Dockerfile
+    # region cannot be changed after creation. ohio is the closest to Central.
+    region: ohio
     # Standard = 2 GB / 1 vCPU. Do NOT use Starter (512 MB / 0.5 vCPU): the
-    # sims matrix alone is ~110 MB resident as float32, and CP-SAT wants a
-    # whole core. Check current plan names/prices before deploying.
+    # sims matrix alone is ~110 MB resident as float32 before numpy's working
+    # copies, and CP-SAT wants a whole core.
     plan: standard
     healthCheckPath: /api/health
     autoDeploy: true
     disk:
       name: blobs
       mountPath: /data          # DFS_BLOB_DIR points here; survives redeploys
-      sizeGB: 1
+      sizeGB: 1                 # can be grown later, never shrunk
     envVars:
       - key: DFS_DATABASE_URL
         fromDatabase:
           name: dfs-postgres
           property: connectionString
       - key: DFS_SESSION_SECRET
-        generateValue: true     # Render generates and stores it
+        generateValue: true     # Render generates once and stores it
       - key: DFS_ENV
-        value: prod
+        value: prod             # HTTPS-only session cookie
       - key: DFS_JOB_MODE
         value: thread
       - key: DFS_BLOB_DIR
         value: /data/blobs
+      - key: DFS_N_SIMS
+        value: "50000"
       - key: DFS_ODDS_API_KEY
         sync: false             # set in the dashboard, never in git
       - key: DFS_FANTASYPROS_API_KEY
@@ -41,6 +47,8 @@ databases:
   - name: dfs-postgres
     databaseName: dfs
     user: dfs
-    # Free Postgres expires after 90 days on Render -- use a paid tier for
-    # anything you care about. Confirm the current plan name.
+    region: ohio
+    # Free Postgres expires after 90 days -- do not use it for real slates.
+    # Confirm the current plan name and price before applying.
     plan: basic-256mb
+    ipAllowList: []             # internal access only; nothing dials in
