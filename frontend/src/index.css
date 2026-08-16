@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0b0e13;
+  --panel: #121722;
+  --raised: #171e2b;
+  --line: #232c3b;
+  --ink: #d8e0ec;
+  --dim: #71809a;
+  --amber: #e3a83b;
+  --up: #43d68c;
+  --down: #ef6461;
+  --chart: #3d4c66;
+}
+
+html, body, #root { height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+/* every numeral in the app is tabular -- section 13, non-negotiable */
+.num, table, input[type="number"] {
+  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.hairline { border-color: var(--line); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+
+input, select {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--ink);
+  outline: none;
+}
+input:focus-visible, select:focus-visible, button:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

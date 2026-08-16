@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+from typing import Protocol
+
+
+class BlobStore(Protocol):
+    def put(self, key: str, data: bytes) -> None: ...
+    def get(self, key: str) -> bytes: ...
+    def exists(self, key: str) -> bool: ...

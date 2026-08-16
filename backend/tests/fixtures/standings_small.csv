@@ -1,0 +1,39 @@
+Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,4986631368,109stairs,0,190.04,DST Commanders  FLEX Kyle Pitts Sr. QB Josh Allen RB James Cook III RB Kenneth Walker III TE Harold Fannin Jr. WR Puka Nacua WR Michael Wilson WR Luther Burden III,,Michael Wilson,WR,81.82%,40.2
+2,4986277633,cb1991,0,181.54,DST Commanders  FLEX Michael Wilson QB Josh Allen RB Josh Jacobs RB RJ Harvey TE Colston Loveland WR Ja'Marr Chase WR Tee Higgins WR Luther Burden III,,Kyle Pitts Sr.,TE,81.82%,15
+3,4986199906,rxendaddy,0,167.02,DST Raiders  FLEX Josh Jacobs QB J.J. McCarthy RB James Cook III RB Quinshon Judkins TE Kyle Pitts Sr. WR Puka Nacua WR Michael Wilson WR Luther Burden III,,James Cook III,RB,72.73%,12.1
+4,4986605160,terryoski,0,166.54,DST Commanders  FLEX Dalton Kincaid QB Josh Allen RB James Cook III RB Chris Rodriguez Jr. TE Kyle Pitts Sr. WR Jaxon Smith-Njigba WR Michael Wilson WR Luther Burden III,,Luther Burden III,WR,72.73%,11
+5,4986530481,bkreider,0,148.04,DST Titans  FLEX Josh Jacobs QB Josh Allen RB James Cook III RB Breece Hall TE Kyle Pitts Sr. WR Michael Wilson WR Adonai Mitchell WR Luther Burden III,,Josh Jacobs,RB,54.55%,17.2
+6,4986871553,kcchiefs628,0,147.24,DST Commanders  FLEX Kyle Pitts Sr. QB Josh Allen RB James Cook III RB Kenneth Walker III TE Dalton Kincaid WR Ja'Marr Chase WR Michael Wilson WR Luther Burden III,,Josh Allen,QB,45.45%,37.84
+7,4985970759,contamiantedesert,0,134.96,DST Raiders  FLEX Tyler Warren QB Tyler Shough RB De'Von Achane RB James Cook III TE Kyle Pitts Sr. WR Ja'Marr Chase WR Michael Wilson WR Luther Burden III,,Ja'Marr Chase,WR,45.45%,10.2
+8,4985525232,drbaldy,0,131.52,DST Falcons  FLEX Josh Jacobs QB J.J. McCarthy RB James Cook III RB Quinshon Judkins TE Kyle Pitts Sr. WR Ja'Marr Chase WR Michael Wilson WR Devaughn Vele,,Commanders,DST,36.36%,3
+9,4986379757,bbyjuju,0,112.24,DST Raiders  FLEX Trey McBride QB Tyrod Taylor RB De'Von Achane RB James Cook III TE Kyle Pitts Sr. WR Michael Wilson WR Adonai Mitchell WR Luther Burden III,,Quinshon Judkins,RB,27.27%,9.4
+10,4983808595,papagates,0,101.42,DST Browns  FLEX Colby Parkinson QB Jayden Daniels RB Josh Jacobs RB Quinshon Judkins TE Kyle Pitts Sr. WR Jaxon Smith-Njigba WR Deebo Samuel Sr. WR Terry McLaurin,,Raiders,DST,27.27%,3
+11,4985250836,mr8teacher,0,81.38,DST Titans  FLEX Colston Loveland QB Baker Mayfield RB Josh Jacobs RB Breece Hall TE Tyler Warren WR Ja'Marr Chase WR Emeka Egbuka WR Chris Godwin Jr.,,J.J. McCarthy,QB,18.18%,20.42
+,,,,,,,De'Von Achane,RB,18.18%,17.5
+,,,,,,,Breece Hall,RB,18.18%,4.3
+,,,,,,,Kenneth Walker III,RB,18.18%,3.8
+,,,,,,,Jaxon Smith-Njigba,WR,18.18%,28.1
+,,,,,,,Puka Nacua,WR,18.18%,38.7
+,,,,,,,Adonai Mitchell,WR,18.18%,3.4
+,,,,,,,Tyler Warren,TE,18.18%,3.7
+,,,,,,,Dalton Kincaid,TE,18.18%,14.1
+,,,,,,,Colston Loveland,TE,18.18%,12.9
+,,,,,,,Titans,DST,18.18%,7
+,,,,,,,Jayden Daniels,QB,9.09%,3.72
+,,,,,,,Baker Mayfield,QB,9.09%,12.08
+,,,,,,,Tyrod Taylor,QB,9.09%,-0.76
+,,,,,,,Tyler Shough,QB,9.09%,22.26
+,,,,,,,RJ Harvey,RB,9.09%,22
+,,,,,,,Chris Rodriguez Jr.,RB,9.09%,5.2
+,,,,,,,Emeka Egbuka,WR,9.09%,3.5
+,,,,,,,Tee Higgins,WR,9.09%,27.2
+,,,,,,,Deebo Samuel Sr.,WR,9.09%,6.7
+,,,,,,,Chris Godwin Jr.,WR,9.09%,10.5
+,,,,,,,Terry McLaurin,WR,9.09%,7.1
+,,,,,,,Devaughn Vele,WR,9.09%,7
+,,,,,,,Trey McBride,FLEX,9.09%,10.8
+,,,,,,,Harold Fannin Jr.,TE,9.09%,28.4
+,,,,,,,Colby Parkinson,FLEX,9.09%,12.2
+,,,,,,,Browns,DST,9.09%,2
+,,,,,,,Falcons,DST,9.09%,0

@@ -1,0 +1,485 @@
+{
+  "draftGroup": {
+    "draftGroupId": 151307,
+    "contestType": {
+      "contestTypeId": 21,
+      "sport": "NFL",
+      "gameType": "SalaryCap",
+      "allowLateSwap": true
+    },
+    "sportId": 1,
+    "startTimeType": "Normal",
+    "minStartTime": "2026-09-13T17:00:00.0000000Z",
+    "maxStartTime": "2026-09-13T20:25:00.0000000Z",
+    "draftGroupState": "Upcoming",
+    "draftGroupSeries": 2,
+    "allowUgc": true,
+    "leagues": [
+      {
+        "leagueId": 1,
+        "leagueName": "National Football League",
+        "leagueAbbreviation": "NFL"
+      }
+    ],
+    "games": [
+      {
+        "gameId": 6175928,
+        "awayTeamId": 362,
+        "homeTeamId": 327,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Paul Brown Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "TB @ CIN",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      },
+      {
+        "gameId": 6175934,
+        "awayTeamId": 366,
+        "homeTeamId": 338,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Lucas Oil Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "BAL @ IND",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          }
+        ]
+      },
+      {
+        "gameId": 6175952,
+        "awayTeamId": 324,
+        "homeTeamId": 325,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Reliant Stadium",
+        "timeRemainingStatus": "Pre-Game",
+        "sport": "NFL",
+        "status": "Pre-Game",
+        "description": "BUF @ HOU",
+        "sportSpecificData": {
+          "timeRemaining": "Pre-Game",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 9,
+            "value": "Pre-Game"
+          },
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          },
+          {
+            "typeId": 46,
+            "value": "0"
+          },
+          {
+            "typeId": 47,
+            "value": "0"
+          },
+          {
+            "typeId": 83,
+            "value": "0"
+          }
+        ]
+      },
+      {
+        "gameId": 6175964,
+        "awayTeamId": 335,
+        "homeTeamId": 347,
+        "startDate": "2026-09-13T20:25:00.0000000Z",
+        "location": "U.S. Bank Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "GB @ MIN",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          }
+        ]
+      },
+      {
+        "gameId": 6175988,
+        "awayTeamId": 363,
+        "homeTeamId": 354,
+        "startDate": "2026-09-13T20:25:00.0000000Z",
+        "location": "Lincoln Financial Field",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "WAS @ PHI",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      },
+      {
+        "gameId": 6176012,
+        "awayTeamId": 350,
+        "homeTeamId": 334,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Ford Field",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "NO @ DET",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      },
+      {
+        "gameId": 6176030,
+        "awayTeamId": 329,
+        "homeTeamId": 365,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "EverBank Field",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "CLE @ JAX",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          }
+        ]
+      },
+      {
+        "gameId": 6176048,
+        "awayTeamId": 355,
+        "homeTeamId": 357,
+        "startDate": "2026-09-13T20:25:00.0000000Z",
+        "location": "SoFi Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "ARI @ LAC",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          }
+        ]
+      },
+      {
+        "gameId": 6176090,
+        "awayTeamId": 345,
+        "homeTeamId": 341,
+        "startDate": "2026-09-13T20:25:00.0000000Z",
+        "location": "Allegiant Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "MIA @ LV",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      },
+      {
+        "gameId": 6176114,
+        "awayTeamId": 352,
+        "homeTeamId": 336,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "LP Field",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "NYJ @ TEN",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "CBS"
+          }
+        ]
+      },
+      {
+        "gameId": 6176144,
+        "awayTeamId": 323,
+        "homeTeamId": 356,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Heinz Field",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "ATL @ PIT",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      },
+      {
+        "gameId": 6176168,
+        "awayTeamId": 326,
+        "homeTeamId": 364,
+        "startDate": "2026-09-13T17:00:00.0000000Z",
+        "location": "Bank of America Stadium",
+        "timeRemainingStatus": "Upcoming",
+        "sport": "NFL",
+        "status": "Upcoming",
+        "description": "CHI @ CAR",
+        "sportSpecificData": {
+          "timeRemaining": "Upcoming",
+          "quarter": "0"
+        },
+        "league": "NFL",
+        "competitionStatus": "Upcoming",
+        "competitionStatusDetail": "",
+        "gameAttributes": [
+          {
+            "typeId": 22,
+            "value": "1"
+          },
+          {
+            "typeId": 23,
+            "value": "2"
+          },
+          {
+            "typeId": 27,
+            "value": "False"
+          },
+          {
+            "typeId": 32,
+            "value": "FOX"
+          }
+        ]
+      }
+    ],
+    "gameTypeId": 1,
+    "allTags": [
+      "Featured"
+    ]
+  },
+  "responseStatus": {
+
+  },
+  "errorStatus": {
+
+  }
+}

@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/ui.tsx","./src/pages/Builder.tsx","./src/pages/Builds.tsx","./src/pages/Contests.tsx","./src/pages/Jobs.tsx","./src/pages/Login.tsx","./src/pages/Pool.tsx","./src/pages/Review.tsx","./src/pages/SetDetail.tsx","./src/pages/SlateOverview.tsx","./src/pages/Slates.tsx"],"version":"5.9.3"}
