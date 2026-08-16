@@ -106,8 +106,31 @@ Hobby plan is $5/mo including $5 of usage. One always-on small service plus
 Postgres plus a 1 GB volume lands in the $5–15/mo range depending on how much
 the service actually runs. Check current Railway pricing — it changes.
 
-## If you'd rather not use Railway
+## Deploying to Render instead
 
-Render and Fly.io both deploy this same Dockerfile with the same single-service
-shape. Render's free Postgres expires after 90 days; Fly needs a `fly.toml` and
-`fly volumes create`. Railway is the least ceremony of the three for this.
+`render.yaml` is committed. Dashboard -> **New** -> **Blueprint** -> pick the
+repo; it provisions the web service, the Postgres, and the disk in one pass.
+Set the four `sync: false` secrets in the dashboard afterward. Everything else
+(bootstrap account, volume, migrations on boot) works identically.
+
+Use the **Standard** instance, not Starter. Starter is 512 MB / 0.5 vCPU; the
+sims matrix is ~110 MB resident as float32 before numpy's working copies, and
+CP-SAT wants a full core. That sizing floor applies on every platform.
+
+## Sizing floor, whichever host
+
+- **>= 2 GB RAM** -- sims matrix resident in the API process (section 12)
+- **>= 1 vCPU** -- CP-SAT candidate generation is the bottleneck
+- **Persistent disk or object storage** -- sims blobs must survive redeploys
+
+## Other hosts
+
+- **Fly.io** -- cheapest raw compute, and `auto_stop_machines` suits a workload
+  that idles six days a week. Costs a `fly.toml`, `flyctl`, and running your own
+  Postgres. Same Dockerfile.
+- **Hetzner + Coolify/Dokploy** -- far more CPU per dollar, which matters if sim
+  counts grow. You own patching, backups, and uptime.
+- **Your own Ubuntu box + Tailscale** -- zero hosting cost, 32 GB of RAM, and it
+  already holds the DuckDB historical store that items 12-14 need. Auth is
+  already built, so Tailscale just handles reachability for three known users.
+  The trade is that a Sunday-morning power or ISP failure is unfixable remotely.

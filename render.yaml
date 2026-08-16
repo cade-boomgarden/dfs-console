@@ -1,0 +1,46 @@
+# Render Blueprint. Same Dockerfile, same single-service shape as Railway.
+# Render dashboard -> New -> Blueprint -> point at this repo.
+services:
+  - type: web
+    name: dfs-console
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Standard = 2 GB / 1 vCPU. Do NOT use Starter (512 MB / 0.5 vCPU): the
+    # sims matrix alone is ~110 MB resident as float32, and CP-SAT wants a
+    # whole core. Check current plan names/prices before deploying.
+    plan: standard
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: blobs
+      mountPath: /data          # DFS_BLOB_DIR points here; survives redeploys
+      sizeGB: 1
+    envVars:
+      - key: DFS_DATABASE_URL
+        fromDatabase:
+          name: dfs-postgres
+          property: connectionString
+      - key: DFS_SESSION_SECRET
+        generateValue: true     # Render generates and stores it
+      - key: DFS_ENV
+        value: prod
+      - key: DFS_JOB_MODE
+        value: thread
+      - key: DFS_BLOB_DIR
+        value: /data/blobs
+      - key: DFS_ODDS_API_KEY
+        sync: false             # set in the dashboard, never in git
+      - key: DFS_FANTASYPROS_API_KEY
+        sync: false
+      - key: DFS_BOOTSTRAP_USER
+        sync: false             # delete both after first login
+      - key: DFS_BOOTSTRAP_PASSWORD
+        sync: false
+
+databases:
+  - name: dfs-postgres
+    databaseName: dfs
+    user: dfs
+    # Free Postgres expires after 90 days on Render -- use a paid tier for
+    # anything you care about. Confirm the current plan name.
+    plan: basic-256mb
