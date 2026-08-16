@@ -1,63 +1,91 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import { Btn } from "../ui";
+import { Badge, Btn, money, num } from "../ui";
 
+interface Cand {
+  raw_key: string; name: string; team: string; position: string;
+  points_ppr: number | null;
+}
 interface Item {
   id: number; source: string; raw_name: string; raw_team: string;
-  raw_position: string; context: Record<string, unknown>; created_at: string;
+  raw_position: string; salary: number | null; candidates: Cand[];
 }
-interface Cand { id: number; name: string; team: string; position: string }
 
 export default function Review() {
   const qc = useQueryClient();
   const items = useQuery({ queryKey: ["review"], queryFn: () => api.get<Item[]>("/api/review") });
-  const [open, setOpen] = useState<number | null>(null);
-  const [q, setQ] = useState("");
-  const cands = useQuery({ queryKey: ["cands", q], enabled: open !== null,
-    queryFn: () => api.get<Cand[]>(`/api/review/candidates?q=${encodeURIComponent(q)}`) });
+  const [msg, setMsg] = useState("");
+  const [needsResim, setNeedsResim] = useState(false);
 
-  const resolve = async (itemId: number, playerId: number | null) => {
-    await api.post(`/api/review/${itemId}/resolve`, { player_id: playerId });
-    setOpen(null);
+  const resolve = async (id: number, raw_key: string | null) => {
+    const r = await api.post<{ projection: number; needs_resim: boolean }>(
+      `/api/review/${id}/resolve`, raw_key ? { raw_key } : { ignore: true });
+    if (raw_key) {
+      setMsg(`Attached — projection ${num(r.projection)}`);
+      if (r.needs_resim) setNeedsResim(true);
+    }
     qc.invalidateQueries({ queryKey: ["review"] });
+    qc.invalidateQueries({ queryKey: ["pool"] });
   };
 
   return (
     <div className="space-y-3">
-      <h1 className="eyebrow">Player match review</h1>
-      <div className="text-[11px] text-[var(--dim)]">
-        Unmatched source names fail loudly into this queue — rookies, mid-week signings, book name variants.
-        Resolving persists the mapping so each variant resolves once.
+      <div className="flex items-center gap-3">
+        <h1 className="eyebrow">Projection review</h1>
+        {items.data && items.data.length > 0 && <Badge>{items.data.length} open</Badge>}
+        {msg && <span className="text-[11px] text-[var(--ink)]">{msg}</span>}
       </div>
+      <div className="text-[11px] text-[var(--dim)] max-w-3xl">
+        Slate players that no projection resolved to — rookies, mid-week signings,
+        source name variants. Each is listed with the unmatched FantasyPros records
+        that could plausibly be the same person. Attaching one writes the projection
+        onto the current pool immediately and remembers the mapping for future pulls.
+      </div>
+      {needsResim && (
+        <div className="panel px-3 py-2 text-[11px]">
+          Projections changed — re-run <span className="text-[var(--ink)]">Simulate</span> on
+          the slate overview so floors and ceilings reflect the new lines.
+        </div>
+      )}
+
       <div className="panel divide-y divide-[var(--line)]">
         {items.data?.map((it) => (
-          <div key={it.id} className="px-4 py-2.5">
+          <div key={it.id} className="px-4 py-3">
             <div className="flex items-center gap-3">
-              <span className="font-medium">{it.raw_name}</span>
-              <span className="text-[var(--dim)]">{it.raw_team} {it.raw_position}</span>
-              <span className="text-[11px] text-[var(--dim)]">from {it.source}</span>
-              <span className="ml-auto flex gap-2">
-                <Btn onClick={() => { setOpen(open === it.id ? null : it.id); setQ(it.raw_name.split(" ").slice(-1)[0]); }}>
-                  Match…
-                </Btn>
-                <Btn kind="ghost" onClick={() => resolve(it.id, null)}>Ignore</Btn>
+              <span className="font-bold">{it.raw_name}</span>
+              <span className="text-[var(--dim)] num">{it.raw_team} {it.raw_position}</span>
+              {it.salary != null && <span className="num text-[var(--dim)]">{money(it.salary)}</span>}
+              <span className="ml-auto">
+                <Btn kind="ghost" onClick={() => resolve(it.id, null)}>No projection exists</Btn>
               </span>
             </div>
-            {open === it.id && (
+            {it.candidates.length === 0 ? (
+              <div className="text-[11px] text-[var(--mute)] mt-1">
+                No plausible FantasyPros record on this team — likely genuinely absent
+                from the projection set.
+              </div>
+            ) : (
               <div className="mt-2 space-y-1">
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search canonical players" className="w-64" />
-                {cands.data?.map((c) => (
-                  <button key={c.id} onClick={() => resolve(it.id, c.id)}
-                    className="block w-full text-left px-2 py-1 rounded hover:bg-[var(--raised)] text-xs">
-                    {c.name} <span className="text-[var(--dim)]">{c.team} {c.position}</span>
+                {it.candidates.map((c) => (
+                  <button key={c.raw_key} onClick={() => resolve(it.id, c.raw_key)}
+                    className="w-full flex items-center gap-3 px-2 py-1 rounded text-left
+                               hover:bg-[var(--raised)] border border-transparent
+                               hover:border-[var(--line)]">
+                    <span className="flex-1">{c.name}</span>
+                    <span className="text-[var(--dim)] num">{c.team} {c.position}</span>
+                    <span className="num">{num(c.points_ppr)} pts</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
         ))}
-        {items.data?.length === 0 && <div className="px-4 py-6 text-[var(--dim)]">Queue is clear.</div>}
+        {items.data?.length === 0 && (
+          <div className="px-4 py-6 text-[var(--dim)]">
+            Every slate player has a projection.
+          </div>
+        )}
       </div>
     </div>
   );

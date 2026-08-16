@@ -6,8 +6,8 @@ export function Btn({ children, onClick, kind = "default", disabled, type = "but
 }) {
   const styles: Record<string, string> = {
     default: "bg-[var(--raised)] border border-[var(--line)] hover:border-[var(--dim)]",
-    primary: "bg-[var(--amber)] text-black font-semibold hover:brightness-110",
-    danger: "bg-transparent border border-[var(--down)] text-[var(--down)] hover:bg-[var(--down)] hover:text-black",
+    primary: "bg-[var(--accent)] text-black font-bold hover:bg-[var(--ink)]",
+    danger: "bg-transparent border border-[var(--dim)] text-[var(--dim)] hover:border-[var(--ink)] hover:text-[var(--ink)]",
     ghost: "bg-transparent text-[var(--dim)] hover:text-[var(--ink)]",
   };
   return (
@@ -46,9 +46,17 @@ export function DistStrip({ histogram, edges, floor, median, ceiling, width = 16
           y={height - (c / max) * (height - 4)} height={(c / max) * (height - 4)}
           fill="var(--chart)" />
       ))}
-      {floor !== undefined && <line x1={x(floor)} x2={x(floor)} y1={0} y2={height} stroke="var(--down)" strokeWidth={1} />}
-      {median !== undefined && <line x1={x(median)} x2={x(median)} y1={0} y2={height} stroke="var(--ink)" strokeWidth={1} />}
-      {ceiling !== undefined && <line x1={x(ceiling)} x2={x(ceiling)} y1={0} y2={height} stroke="var(--up)" strokeWidth={1} />}
+      {/* floor: dashed + dim | median: solid + brightest | ceiling: dashed + bright.
+          Dash pattern carries the distinction so nothing depends on hue. */}
+      {floor !== undefined && (
+        <line x1={x(floor)} x2={x(floor)} y1={0} y2={height}
+              stroke="var(--mute)" strokeWidth={1} strokeDasharray="2 2" />)}
+      {ceiling !== undefined && (
+        <line x1={x(ceiling)} x2={x(ceiling)} y1={0} y2={height}
+              stroke="var(--ink)" strokeWidth={1} strokeDasharray="2 2" />)}
+      {median !== undefined && (
+        <line x1={x(median)} x2={x(median)} y1={0} y2={height}
+              stroke="var(--accent)" strokeWidth={1.5} />)}
     </svg>
   );
 }

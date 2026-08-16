@@ -1,29 +1,50 @@
 @import "tailwindcss";
 
+/* Atkinson Hyperlegible: letterforms designed so similar glyphs stay
+   distinguishable. The Mono companion carries true fixed-width figures, which
+   is what keeps numeric columns from jittering -- the proportional face has no
+   tabular-figures feature to fall back on. */
+@import "@fontsource/atkinson-hyperlegible/400.css";
+@import "@fontsource/atkinson-hyperlegible/700.css";
+@import "@fontsource/atkinson-hyperlegible-mono/400.css";
+@import "@fontsource/atkinson-hyperlegible-mono/500.css";
+@import "@fontsource/atkinson-hyperlegible-mono/700.css";
+
 :root {
-  --bg: #0b0e13;
-  --panel: #121722;
-  --raised: #171e2b;
-  --line: #232c3b;
-  --ink: #d8e0ec;
-  --dim: #71809a;
-  --amber: #e3a83b;
-  --up: #43d68c;
-  --down: #ef6461;
-  --chart: #3d4c66;
+  /* Monochrome ramp. Meaning is carried by luminance, weight, and glyph --
+     never by hue -- so nothing depends on colour discrimination. */
+  --bg:      #0b0b0c;
+  --panel:   #131315;
+  --raised:  #1c1c1f;
+  --line:    #2b2b30;
+  --ink:     #e9e9ec;   /* primary text, emphasis, "high" end of a range */
+  --dim:     #8a8a92;   /* secondary text, labels */
+  --mute:    #5c5c65;   /* tertiary, "low" end of a range */
+  --accent:  #ffffff;   /* the single brightest step: primary action, median */
+  --chart:   #45454e;   /* histogram fill */
+
+  /* Semantic aliases kept as names so a colour scheme is a one-file change.
+     Today they all resolve into the ramp above. */
+  --up:      var(--ink);
+  --down:    var(--mute);
+  --amber:   var(--accent);
+
+  --font-ui: "Atkinson Hyperlegible", ui-sans-serif, system-ui, sans-serif;
+  --font-num: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
 }
 
 html, body, #root { height: 100%; }
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-ui);
   font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* every numeral in the app is tabular -- section 13, non-negotiable */
+/* every numeral in the app is fixed-width */
 .num, table, input[type="number"] {
-  font-family: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+  font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
 }
@@ -47,10 +68,11 @@ input, select {
   border-radius: 4px;
   padding: 4px 8px;
   color: var(--ink);
+  font-family: var(--font-ui);
   outline: none;
 }
 input:focus-visible, select:focus-visible, button:focus-visible {
-  outline: 2px solid var(--amber);
+  outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 

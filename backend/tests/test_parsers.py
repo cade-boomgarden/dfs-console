@@ -84,3 +84,12 @@ def test_standings_parses_entries_and_ownership():
     assert own["drafted_pct"] is not None
     slots = parse_standings_lineup(parsed["entries"][0]["lineup"])
     assert len(slots) == 9
+
+
+def test_dk_status_none_string_is_normalised():
+    """DK sends the literal string "None" for a healthy player, not null."""
+    parsed = dk.parse_draftables(load("dkdraftables_fixture_small.json"))
+    statuses = {p["status"] for p in parsed["players"]}
+    assert "None" not in statuses, 'the string "None" must not survive parsing'
+    assert None in statuses                      # healthy players
+    assert statuses & {"Q", "OUT", "IR"}         # real designations preserved

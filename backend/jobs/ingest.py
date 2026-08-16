@@ -12,7 +12,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..identity.resolver import AUTO_ACCEPT, Candidate, resolve_name
-from ..identity.rules import norm_team
+from ..identity.rules import norm_name, norm_team
 from ..models.db import SessionLocal
 from ..models.models import (Game, OddsSnapshot, PlayerCanonical, PoolPlayer,
                              PoolVersion, ReviewItem, Slate, SourceMap)
@@ -123,10 +123,11 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
     slate_teams = {r["team"] for r in dk_players.values()}
 
     stats_by_canon: dict[int, dict] = {}
+    unresolved: list[dict] = []
     n_unmatched = 0
     for rec in fp_players:
-        # FP covers the whole league; players from non-slate teams are
-        # expected misses, not review candidates
+        # FP covers the whole league; players from non-slate teams cannot
+        # correspond to anyone on this slate.
         if norm_team(rec["team"]) not in slate_teams:
             continue
         raw_key = f"{rec['name']}|{rec['team']}|{rec['position']}"
@@ -148,22 +149,35 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                 canon.fpid, canon.mflid = rec.get("fpid"), rec.get("mflid")
         else:
             n_unmatched += 1
-            exists = db.query(ReviewItem).filter_by(
-                source="fantasypros", raw_name=rec["name"], status="open").first()
-            if not exists:
-                db.add(ReviewItem(source="fantasypros", raw_name=rec["name"],
-                                  raw_team=rec["team"], raw_position=rec["position"],
-                                  context={"confidence": res.confidence, "method": res.method,
-                                           "raw_key": raw_key}))
-    # Coverage check (11b): the loop above is FantasyPros-driven, so a slate
-    # player that no FP record resolves to silently ends up with no stats and
-    # a zero projection. Surface those by name rather than letting them ship.
-    no_projection = sorted(
-        f"{r['name']} ({r['team']} {r['position']})"
-        for r in dk_players.values()
-        if r["canonical_id"] not in stats_by_canon
-        and (r.get("status") or "") not in ("OUT", "IR")
-    )
+            rec = dict(rec, raw_key=raw_key,
+                       confidence=res.confidence, method=res.method)
+            unresolved.append(rec)
+
+    # --- Review queue is SLATE-driven, not source-driven ----------------------
+    # FantasyPros lists ~30 players per team; DraftKings lists ~14. Queueing
+    # every FP record without a DK counterpart buries the handful that matter
+    # under hundreds of third-stringers who will never be on a slate. What
+    # actually needs a human is the inverse: a slate player with no projection.
+    # Each item carries its plausible FP records inline so resolving one
+    # attaches the stats immediately -- no re-ingest.
+    db.query(ReviewItem).filter_by(status="open").update({"status": "stale"})
+
+    no_projection = []
+    for rec in sorted(dk_players.values(), key=lambda r: -r["salary"]):
+        if rec["canonical_id"] in stats_by_canon:
+            continue
+        if (rec.get("status") or "") in ("OUT", "IR"):
+            continue
+        no_projection.append(f"{rec['name']} ({rec['team']} {rec['position']})")
+        cands = _rank_candidates(rec, unresolved)
+        db.add(ReviewItem(
+            source="projection", raw_name=rec["name"], raw_team=rec["team"],
+            raw_position=rec["position"], resolved_player_id=None,
+            context={
+                "canonical_id": rec["canonical_id"],
+                "salary": rec["salary"],
+                "candidates": cands,
+            }))
     db.commit()
 
     # --- 4. odds ---------------------------------------------------------------
@@ -234,6 +248,40 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
         "no_projection_count": len(no_projection),
         "no_projection": no_projection[:40],
             "games": len(games)}
+
+
+def _rank_candidates(slate_rec: dict, unresolved: list[dict],
+                      limit: int = 8) -> list[dict]:
+    """Plausible FantasyPros records for one slate player, best first.
+
+    Same team and position first, then same team, then same last name anywhere
+    on the slate (covers a source listing a stale team after a trade).
+    """
+    want_team = norm_team(slate_rec["team"])
+    want_pos = slate_rec["position"]
+    want_last = norm_name(slate_rec["name"]).split()[-1] if slate_rec["name"] else ""
+
+    scored = []
+    for r in unresolved:
+        team_ok = norm_team(r["team"]) == want_team
+        pos_ok = r["position"] == want_pos
+        last_ok = bool(want_last) and norm_name(r["name"]).split()[-1:] == [want_last]
+        if not (team_ok or last_ok):
+            continue
+        score = (3 if (team_ok and pos_ok) else 0) + (2 if last_ok else 0) + (1 if team_ok else 0)
+        scored.append((score, r))
+    scored.sort(key=lambda x: -x[0])
+    out = []
+    for _, r in scored[:limit]:
+        st = r.get("stats") or {}
+        out.append({
+            "raw_key": r["raw_key"], "name": r["name"], "team": r["team"],
+            "position": r["position"], "fpid": r.get("fpid"),
+            "mflid": r.get("mflid"),
+            "points_ppr": st.get("points_ppr", st.get("points")),
+            "stats": st,
+        })
+    return out
 
 
 def _bootstrap_ownership(db: Session, pool_version_id: int) -> None:

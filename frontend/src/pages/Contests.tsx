@@ -127,8 +127,9 @@ export default function Contests() {
             <div className="eyebrow mb-2">{results.contest.name} — entries</div>
             <div className="num text-xs mb-2">
               Fees {money(results.roi.fees)} · Winnings {money(results.roi.winnings)} ·
-              ROI <span className={(results.roi.roi ?? 0) >= 0 ? "text-[var(--up)]" : "text-[var(--down)]"}>
-                {results.roi.roi === null ? "—" : `${(results.roi.roi * 100).toFixed(1)}%`}
+              ROI <span className={(results.roi.roi ?? 0) >= 0 ? "text-[var(--ink)]" : "text-[var(--dim)]"}>
+                {results.roi.roi === null ? "—"
+                  : `${results.roi.roi >= 0 ? "▲" : "▼"} ${Math.abs(results.roi.roi * 100).toFixed(1)}%`}
               </span>
             </div>
             <div className="max-h-64 overflow-auto">

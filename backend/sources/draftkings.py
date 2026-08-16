@@ -57,7 +57,12 @@ def parse_draftables(payload: dict[str, Any]) -> dict[str, Any]:
             "team": d.get("teamAbbreviation", ""),
             "team_id": d.get("teamId"),
             "salary": d.get("salary", 0),
-            "status": d.get("status") or None,           # None/Q/IR/OUT -- authoritative
+            # DK sends the literal STRING "None" for a healthy player, not
+            # null. Normalise it away here so the rest of the system can treat
+            # a status as "has a designation".
+            "status": (d.get("status") or "").strip() or None
+            if (d.get("status") or "").strip().lower() not in ("none", "")
+            else None,
             "is_disabled": bool(d.get("isDisabled")),    # secondary confirmation only
             "competition_id": (d.get("competition") or {}).get("competitionId"),
             "game_name": (d.get("competition") or {}).get("name", ""),
