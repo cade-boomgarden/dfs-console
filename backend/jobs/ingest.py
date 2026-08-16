@@ -68,6 +68,13 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                       season=payload.get("season"), week=payload.get("week"))
         db.add(slate)
         db.commit()
+    else:
+        # a later pull may supply the season/week the slate was created without
+        if payload.get("season"):
+            slate.season = int(payload["season"])
+        if payload.get("week"):
+            slate.week = int(payload["week"])
+        db.commit()
 
     # --- 2. draftables -------------------------------------------------------
     ctx.update(0.15, "Ingesting DraftKings draftables")
