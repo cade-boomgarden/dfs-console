@@ -108,8 +108,14 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
     if fixture_dir:
         fp_raw = _load_fixture(fixture_dir, "fp_projections.json")
     else:
-        fp_raw = fp.fetch(payload.get("season", 2026), payload.get("week", 1),
-                          settings.fantasypros_api_key)
+        season = payload.get("season") or slate.season
+        week = payload.get("week") or slate.week
+        if not season or not week:
+            raise ValueError(
+                "A live ingest needs an explicit season and week. Pass them in "
+                "the ingest request; without a week FantasyPros returns "
+                "season-long totals.")
+        fp_raw = fp.fetch(int(season), int(week), settings.fantasypros_api_key)
     fp_players = fp.parse_projections(fp_raw)
 
     candidates = [Candidate(str(r["canonical_id"]), r["name"], r["team"], r["position"])
@@ -149,6 +155,15 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                                   raw_team=rec["team"], raw_position=rec["position"],
                                   context={"confidence": res.confidence, "method": res.method,
                                            "raw_key": raw_key}))
+    # Coverage check (11b): the loop above is FantasyPros-driven, so a slate
+    # player that no FP record resolves to silently ends up with no stats and
+    # a zero projection. Surface those by name rather than letting them ship.
+    no_projection = sorted(
+        f"{r['name']} ({r['team']} {r['position']})"
+        for r in dk_players.values()
+        if r["canonical_id"] not in stats_by_canon
+        and (r.get("status") or "") not in ("OUT", "IR")
+    )
     db.commit()
 
     # --- 4. odds ---------------------------------------------------------------
@@ -216,6 +231,8 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
 
     return {"slate_id": slate.id, "pool_version_id": pv.id,
             "pool_size": n_pool, "fp_unmatched": n_unmatched,
+        "no_projection_count": len(no_projection),
+        "no_projection": no_projection[:40],
             "games": len(games)}
 
 
