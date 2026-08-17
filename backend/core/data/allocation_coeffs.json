@@ -1,0 +1,106 @@
+{
+  "meta": {
+    "fitted": true,
+    "fitted_at": "2026-08-17",
+    "seasons": [
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "half_life_games": 4.0,
+    "method": "EW-conditional MLE (NB counts, gamma efficiency, Beta shares)"
+  },
+  "dispersion": {
+    "QB": {
+      "att_k": 8.48,
+      "cmp_k": 18.15,
+      "ypc_cv": 1.608,
+      "ypa_cv": 1.56,
+      "td_k": 400.0
+    },
+    "RB": {
+      "att_k": 4.06,
+      "tgt_k": 5.65,
+      "ypc_cv": 1.481,
+      "ypr_cv": 1.115,
+      "td_k": 6.34
+    },
+    "WR": {
+      "tgt_k": 11.11,
+      "ypr_cv": 0.909,
+      "td_k": 8.4
+    },
+    "TE": {
+      "tgt_k": 14.63,
+      "ypr_cv": 0.847,
+      "td_k": 2.37
+    }
+  },
+  "weekly_phi": {
+    "RB": {
+      "carry_share": 5.51,
+      "target_share": 27.34,
+      "gl_carry_share": 4.35
+    },
+    "WR": {
+      "target_share": 24.45,
+      "air_yards_share": 8.51
+    },
+    "TE": {
+      "target_share": 33.54,
+      "air_yards_share": 14.58
+    }
+  },
+  "priors": {
+    "QB": {
+      "rush_att_per_dropback": 0.1075,
+      "designed_rush_rate": 0.0606,
+      "scramble_rate": 0.0468,
+      "adot": 7.324,
+      "deep_rate": 0.1082,
+      "sack_rate": 0.0632,
+      "int_rate": 0.0211,
+      "ypa": 6.6589,
+      "ypc": 4.3605,
+      "snap_share": 0.8557
+    },
+    "RB": {
+      "carry_share": 0.3897,
+      "gl_carry_share": 0.3108,
+      "targets_per_dropback": 0.0622,
+      "ypc": 4.3109,
+      "target_share": 0.0727,
+      "rec_adot": 0.3024,
+      "ez_target_share": 0.0156,
+      "ypr": 7.4423,
+      "yac_per_rec": 7.7581,
+      "snap_share": 0.4073
+    },
+    "TE": {
+      "targets_per_dropback": 0.0919,
+      "target_share": 0.1072,
+      "air_yards_share": 0.0926,
+      "rec_adot": 6.7997,
+      "deep_target_rate": 0.0717,
+      "ez_target_share": 0.1201,
+      "ypr": 10.4388,
+      "yac_per_rec": 4.8556,
+      "snap_share": 0.5612
+    },
+    "WR": {
+      "targets_per_dropback": 0.1263,
+      "target_share": 0.1475,
+      "air_yards_share": 0.1996,
+      "rec_adot": 10.717,
+      "deep_target_rate": 0.1662,
+      "ez_target_share": 0.1758,
+      "ypr": 12.6436,
+      "yac_per_rec": 4.3181,
+      "snap_share": 0.6179
+    }
+  }
+}
