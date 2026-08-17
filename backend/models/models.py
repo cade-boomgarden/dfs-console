@@ -69,6 +69,7 @@ class PlayerCanonical(Base):
     mflid: Mapped[int | None] = mapped_column(Integer, nullable=True)
     player_dk_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     gsis_id: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    draft_pick: Mapped[int | None] = mapped_column(Integer, nullable=True)  # overall; cold-start prior (14f)
 
 
 class SourceMap(Base):
@@ -232,6 +233,29 @@ class OwnershipObservation(Base):
     position: Mapped[str] = mapped_column(String(8), default="")
     drafted_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     fpts: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class ProfileSnapshot(Base):
+    """Per-player profile as of (season, week) -- build item 12.
+
+    Imported from the offline artifact (`scripts/build_profiles.py`).
+    Snapshots are kept per as-of week (14g) so past builds reproduce and the
+    correlation inspector can show what the sim actually used.
+    """
+    __tablename__ = "profile_snapshots"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    gsis_id: Mapped[str] = mapped_column(String(16), index=True)
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    position: Mapped[str] = mapped_column(String(8), default="")
+    team: Mapped[str] = mapped_column(String(8), default="")
+    features: Mapped[dict] = mapped_column(JSON, default=dict)
+    opportunities: Mapped[dict] = mapped_column(JSON, default=dict)
+    games: Mapped[int] = mapped_column(Integer, default=0)
+    label: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("gsis_id", "season", "week"),)
 
 
 class OddsSnapshot(Base):

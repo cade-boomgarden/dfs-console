@@ -51,7 +51,11 @@ class Dispersion:
     ypr_cv: float = 0.65       # yards per reception
     ypa_cv: float = 0.30       # yards per pass attempt
     cmp_k: float = 25.0        # pass attempts
-    td_inflation: float = 1.0  # >1 widens TD counts beyond Poisson
+    td_k: float = 8.0          # TD-count NB dispersion: lower = fatter tails
+    # NOTE: replaces the old `td_inflation` scaled-Poisson scheme, which had
+    # inverted semantics (poisson(m*t)/t has variance m/t, so t>1 *narrowed*
+    # the distribution) and produced fractional TD counts. Negative binomial
+    # gives integer draws with variance m + m^2/k; k -> inf recovers Poisson.
 
 
 @dataclass
@@ -185,7 +189,7 @@ def simulate(
         att = _nbinom(rng, line.pass_att or line.pass_yds / 7.0, disp.cmp_k, n)
         ypa = line.pass_yds / max(line.pass_att or line.pass_yds / 7.0, 1e-9)
         pyds = _gamma_yards(rng, att, ypa, disp.ypa_cv)
-        ptds = rng.poisson(line.pass_tds * disp.td_inflation, n) / disp.td_inflation
+        ptds = _nbinom(rng, line.pass_tds, disp.td_k, n)
         ints = rng.poisson(line.pass_ints, n)
         pts += pyds * PASS_YD + ptds * PASS_TD + ints * INT
         pts += (pyds >= PASS_BONUS_AT) * BONUS
@@ -195,7 +199,7 @@ def simulate(
         att = _nbinom(rng, line.rush_att, disp.att_k, n)
         ypc = line.rush_yds / max(line.rush_att, 1e-9)
         ryds = _gamma_yards(rng, att, ypc, disp.ypc_cv)
-        rtds = rng.poisson(line.rush_tds * disp.td_inflation, n) / disp.td_inflation
+        rtds = _nbinom(rng, line.rush_tds, disp.td_k, n)
         pts += ryds * RUSH_YD + rtds * RUSH_TD
         pts += (ryds >= RUSH_BONUS_AT) * BONUS
 
@@ -204,7 +208,7 @@ def simulate(
         rec = _nbinom(rng, line.rec, disp.tgt_k, n)
         ypr = line.rec_yds / max(line.rec, 1e-9)
         cyds = _gamma_yards(rng, rec, ypr, disp.ypr_cv)
-        ctds = rng.poisson(line.rec_tds * disp.td_inflation, n) / disp.td_inflation
+        ctds = _nbinom(rng, line.rec_tds, disp.td_k, n)
         pts += rec * REC + cyds * REC_YD + ctds * REC_TD
         pts += (cyds >= REC_BONUS_AT) * BONUS
 

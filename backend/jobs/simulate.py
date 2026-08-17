@@ -3,18 +3,66 @@
 Independent player draws (build item 6). Per-game RNG partitioning is already
 in core/sims.py so the hierarchical sim (item 14) slots in without schema or
 cache changes.
+
+Dispersion is profile-driven (build items 12/13): fitted per-position
+parameters from `core/data/allocation_coeffs.json`, adjusted per player by
+their profile snapshot. Players with no snapshot (rookies, debuts) get a
+cold-start profile derived from their projection + draft capital (14f).
 """
 from __future__ import annotations
 
 import numpy as np
 
+from ..core.allocation import AllocationCoeffs, dispersion_for
+from ..core.profiles import PlayerProfile, cold_start_features
 from ..core.sims import SimPlayer, build_sims
-from ..core.variance import Dispersion, StatLine
+from ..core.variance import StatLine
 from ..models.db import SessionLocal
-from ..models.models import Adjustment, PoolPlayer, PoolVersion
+from ..models.models import (Adjustment, PlayerCanonical, PoolPlayer,
+                             PoolVersion, ProfileSnapshot)
 from ..settings import get_settings
 from . import simscache
 from .runner import JobContext, register
+
+
+def load_profiles(db, pool: list[PoolPlayer]) -> tuple[dict[int, PlayerProfile], int]:
+    """player_id -> profile for the pool. Latest snapshot per gsis_id, cold
+    start for the rest. Returns (map, n_from_snapshot)."""
+    ids = [pp.player_id for pp in pool]
+    canon = {c.id: c for c in (db.query(PlayerCanonical)
+                               .filter(PlayerCanonical.id.in_(ids)).all())}
+    gsis_ids = [c.gsis_id for c in canon.values() if c.gsis_id]
+    snaps: dict[str, ProfileSnapshot] = {}
+    if gsis_ids:
+        for s in (db.query(ProfileSnapshot)
+                  .filter(ProfileSnapshot.gsis_id.in_(gsis_ids))
+                  .order_by(ProfileSnapshot.season, ProfileSnapshot.week).all()):
+            snaps[s.gsis_id] = s          # later (newer) rows overwrite
+
+    out: dict[int, PlayerProfile] = {}
+    hits = 0
+    for pp in pool:
+        if pp.position == "DST":
+            continue
+        c = canon.get(pp.player_id)
+        s = snaps.get(c.gsis_id) if (c and c.gsis_id) else None
+        if s is not None:
+            out[pp.player_id] = PlayerProfile(
+                gsis_id=s.gsis_id, name=pp.name, position=pp.position,
+                team=pp.team, season=s.season, week=s.week,
+                features=dict(s.features or {}),
+                opportunities=dict(s.opportunities or {}),
+                games_observed=s.games, label=s.label)
+            hits += 1
+        else:
+            feats = cold_start_features(
+                pp.position, pp.stats or {},
+                overall_pick=c.draft_pick if c else None)
+            out[pp.player_id] = PlayerProfile(
+                gsis_id=c.gsis_id if c else "", name=pp.name,
+                position=pp.position, team=pp.team, season=0, week=0,
+                features=feats, label="cold-start")
+    return out, hits
 
 
 def statline_from_stats(name: str, position: str, stats: dict) -> StatLine:
@@ -58,6 +106,9 @@ def simulate_job(job_id: int) -> None:
             if a.value:
                 variance_overrides[a.player_id] = float(a.value)
 
+        coeffs = AllocationCoeffs.load()
+        prof_map, prof_hits = load_profiles(db, pool)
+
         sim_players = []
         for pp in pool:
             sim_players.append(SimPlayer(
@@ -67,7 +118,8 @@ def simulate_job(job_id: int) -> None:
                 line=statline_from_stats(pp.name, pp.position, pp.stats or {}),
                 dst_stats=pp.stats if pp.position == "DST" else None,
                 implied_opponent_total=pp.implied_opp_total or 21.0,
-                dispersion=Dispersion(),
+                dispersion=dispersion_for(pp.position, coeffs,
+                                          prof_map.get(pp.player_id)),
                 variance_scale=variance_overrides.get(pp.player_id, 1.0),
             ))
 
@@ -90,6 +142,9 @@ def simulate_job(job_id: int) -> None:
         pv.sims_seed = seed
         db.commit()
         ctx.finish({"pool_version_id": pv_id, "n_sims": n_sims,
-                    "n_players": len(order), "blob_key": key})
+                    "n_players": len(order), "blob_key": key,
+                    "profiles_used": prof_hits,
+                    "cold_start": len(prof_map) - prof_hits,
+                    "coeffs_fitted": bool(coeffs.meta.get("fitted"))})
     finally:
         db.close()
