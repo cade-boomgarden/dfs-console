@@ -1,71 +1,165 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, LineupDTO } from "../api";
 import { Badge, DistStrip, money, num } from "../ui";
 
+interface Exposure {
+  player_id: number; name: string; position: string; team: string;
+  opponent: string; salary: number | null; projection: number | null;
+  ceiling: number | null; ownership: number | null; value: number | null;
+  implied_total: number | null; count: number; exposure: number;
+}
+interface TeamExposure {
+  team: string; implied_total: number | null; lineups: number;
+  lineup_pct: number; slots: number; slots_per_lineup: number;
+}
 interface Detail {
   id: number; kind: string; label: string; n_eff: number | null; n_eff_flag: boolean;
-  lineups: LineupDTO[];
-  exposures: { player_id: string; name: string; count: number; exposure: number }[];
+  lineups: LineupDTO[]; exposures: Exposure[]; team_exposures: TeamExposure[];
+  diagnostics: { n_eff_random_baseline?: number; n_candidates?: number };
   overlap_hist: number[]; type_counts: Record<string, number>;
+}
+
+const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
+type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
+
+function Bar({ pct }: { pct: number }) {
+  return (
+    <div className="w-14 h-1.5 bg-[var(--raised)] rounded inline-block align-middle">
+      <div className="h-full bg-[var(--ink)] rounded" style={{ width: `${Math.min(pct * 100, 100)}%` }} />
+    </div>
+  );
 }
 
 export default function SetDetail() {
   const { slateId, setId } = useParams();
   const d = useQuery({ queryKey: ["set", setId],
     queryFn: () => api.get<Detail>(`/api/slates/${slateId}/sets/${setId}`) });
+  const [pos, setPos] = useState<string>("ALL");
+  const [sort, setSort] = useState<SortKey>("exposure");
+
+  const rows = useMemo(() => {
+    const list = (d.data?.exposures ?? []).filter((e) => pos === "ALL" || e.position === pos);
+    return [...list].sort((a, b) => (Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity)));
+  }, [d.data, pos, sort]);
+
   if (!d.data) return null;
   const s = d.data;
   const maxOv = Math.max(...s.overlap_hist, 1);
+  const baseline = s.diagnostics?.n_eff_random_baseline;
+
+  const Th = ({ k, children, right }: { k?: SortKey; children: React.ReactNode; right?: boolean }) => (
+    <th onClick={k ? () => setSort(k) : undefined}
+      className={`px-2 py-1.5 text-[10px] uppercase tracking-wider text-[var(--dim)] whitespace-nowrap
+        ${right ? "text-right" : "text-left"} ${k ? "cursor-pointer select-none" : ""}`}>
+      {children}{k && sort === k ? " ↓" : ""}
+    </th>
+  );
+
   return (
     <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <h1 className="text-lg font-semibold">{s.label}</h1>
+      <div className="flex items-center gap-3 flex-wrap">
+        <h1 className="text-lg font-bold">{s.label}</h1>
         <Badge>{s.kind}</Badge>
+        <span className="num text-[var(--dim)]">{s.lineups.length} lineups</span>
         {s.n_eff !== null && (
-          <span className="num">N<sub>eff</sub>{" "}
-            <span className={s.n_eff_flag ? "text-[var(--down)]" : "text-[var(--up)]"}>{num(s.n_eff)}</span>
+          <span className="num" title="Effective number of independent lineups, from the eigenvalues of the score covariance">
+            N<sub>eff</sub> <span className="text-[var(--ink)]">{num(s.n_eff)}</span>
+            {baseline != null && (
+              <span className="text-[var(--dim)]"> / {num(baseline)} random</span>
+            )}
           </span>
         )}
-        {s.n_eff_flag && <Badge tone="down">Stage A producing lookalikes — widen skeleton spread</Badge>}
+        {s.n_eff_flag && <Badge>below your calibrated floor</Badge>}
       </div>
 
-      <div className="grid grid-cols-[1fr_280px] gap-4">
-        <div className="panel overflow-auto max-h-[70vh]">
-          <table className="w-full">
-            <thead className="sticky top-0 bg-[var(--panel)]">
-              <tr className="border-b hairline">
-                {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
-                  <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {s.lineups.map((lu) => (
-                <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
-                  <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
-                  <td className="px-2 py-1.5">
-                    <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
-                      floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
-                  </td>
-                  <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
-                  <td className="px-2 py-1.5 num text-[var(--up)]">{num(lu.ceiling)}</td>
-                  <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
-                  <td className="px-2 py-1.5 num">{num(lu.ownership, 0)}%</td>
-                  <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
-                  <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
-                    {lu.slots.map((sl) => sl.name).join(" · ")}
-                  </td>
-                </tr>
+      {/* ---------------- exposure report ---------------- */}
+      <section className="grid grid-cols-[1fr_360px] gap-4 items-start">
+        <div className="panel">
+          <div className="flex items-center gap-2 px-3 py-2 border-b hairline">
+            <span className="eyebrow">Player exposure</span>
+            <div className="ml-auto flex gap-1">
+              {POSITIONS.map((p) => (
+                <button key={p} onClick={() => setPos(p)}
+                  className={`px-2 py-0.5 rounded text-xs ${pos === p ? "bg-[var(--raised)] text-[var(--ink)]" : "text-[var(--dim)] hover:text-[var(--ink)]"}`}>
+                  {p}
+                </button>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </div>
+          <div className="overflow-auto max-h-[62vh]">
+            <table className="w-full">
+              <thead className="sticky top-0 bg-[var(--panel)]">
+                <tr className="border-b hairline">
+                  <Th>Player</Th><Th>Pos</Th><Th>Tm</Th>
+                  <Th k="salary" right>Salary</Th>
+                  <Th k="projection" right>Proj</Th>
+                  <Th k="value" right>Val</Th>
+                  <Th k="ownership" right>Own%</Th>
+                  <Th right>Impl</Th>
+                  <Th k="exposure" right>Exposure</Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((e) => (
+                  <tr key={e.player_id} className="border-b hairline hover:bg-[var(--raised)]">
+                    <td className="px-2 py-1 whitespace-nowrap">{e.name}</td>
+                    <td className="px-2 py-1 text-[var(--dim)]">{e.position}</td>
+                    <td className="px-2 py-1 text-[var(--dim)]">{e.team}</td>
+                    <td className="px-2 py-1 text-right num">{money(e.salary)}</td>
+                    <td className="px-2 py-1 text-right num">{num(e.projection)}</td>
+                    <td className="px-2 py-1 text-right num">{num(e.value, 2)}</td>
+                    <td className="px-2 py-1 text-right num text-[var(--dim)]">{num(e.ownership)}</td>
+                    <td className="px-2 py-1 text-right num text-[var(--dim)]">{num(e.implied_total)}</td>
+                    <td className="px-2 py-1 text-right num whitespace-nowrap">
+                      <Bar pct={e.exposure} />
+                      <span className="ml-2">{(e.exposure * 100).toFixed(0)}%</span>
+                      <span className="ml-1 text-[var(--mute)]">({e.count})</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-3 py-1.5 text-[10px] text-[var(--dim)] border-t hairline">
+            {rows.length} players · Val = projected points per $1,000 · Impl = team implied total
+          </div>
         </div>
 
         <div className="space-y-4">
+          <div className="panel">
+            <div className="px-3 py-2 border-b hairline eyebrow">Team exposure</div>
+            <div className="overflow-auto max-h-[38vh]">
+              <table className="w-full">
+                <thead className="sticky top-0 bg-[var(--panel)]">
+                  <tr className="border-b hairline">
+                    <Th>Team</Th><Th right>Impl</Th><Th right>Slots/LU</Th><Th right>In lineups</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.team_exposures.map((t) => (
+                    <tr key={t.team} className="border-b hairline hover:bg-[var(--raised)]">
+                      <td className="px-2 py-1">{t.team}</td>
+                      <td className="px-2 py-1 text-right num">{num(t.implied_total)}</td>
+                      <td className="px-2 py-1 text-right num">{num(t.slots_per_lineup, 2)}</td>
+                      <td className="px-2 py-1 text-right num whitespace-nowrap">
+                        <Bar pct={t.lineup_pct} />
+                        <span className="ml-2">{(t.lineup_pct * 100).toFixed(0)}%</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="px-3 py-1.5 text-[10px] text-[var(--dim)] border-t hairline">
+              Slots/LU = average players from that team per lineup
+            </div>
+          </div>
+
           <div className="panel p-3">
             <div className="eyebrow mb-2">Pairwise overlap</div>
-            <div className="flex items-end gap-0.5 h-16">
+            <div className="flex items-end gap-0.5 h-14">
               {s.overlap_hist.map((c, i) => (
                 <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
                   <div className="w-full bg-[var(--chart)]" style={{ height: `${(c / maxOv) * 100}%` }} />
@@ -74,6 +168,7 @@ export default function SetDetail() {
               ))}
             </div>
           </div>
+
           <div className="panel p-3">
             <div className="eyebrow mb-2">Lineup types</div>
             {Object.entries(s.type_counts).sort((a, b) => b[1] - a[1]).map(([t, c]) => (
@@ -82,20 +177,40 @@ export default function SetDetail() {
               </div>
             ))}
           </div>
-          <div className="panel p-3 max-h-72 overflow-auto">
-            <div className="eyebrow mb-2">Exposure</div>
-            {s.exposures.slice(0, 40).map((e) => (
-              <div key={e.player_id} className="flex items-center gap-2 text-[11px] py-0.5">
-                <span className="flex-1 truncate">{e.name}</span>
-                <div className="w-16 h-1.5 bg-[var(--raised)] rounded">
-                  <div className="h-full bg-[var(--amber)] rounded" style={{ width: `${e.exposure * 100}%` }} />
-                </div>
-                <span className="num w-10 text-right">{(e.exposure * 100).toFixed(0)}%</span>
-              </div>
-            ))}
-          </div>
         </div>
-      </div>
+      </section>
+
+      {/* ---------------- lineups ---------------- */}
+      <section className="panel overflow-auto max-h-[60vh]">
+        <table className="w-full">
+          <thead className="sticky top-0 bg-[var(--panel)]">
+            <tr className="border-b hairline">
+              {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
+                <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {s.lineups.map((lu) => (
+              <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
+                <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
+                <td className="px-2 py-1.5">
+                  <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
+                    floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
+                </td>
+                <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
+                <td className="px-2 py-1.5 num">{num(lu.ceiling)}</td>
+                <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
+                <td className="px-2 py-1.5 num">{num(lu.ownership, 0)}%</td>
+                <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
+                <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
+                  {lu.slots.map((sl) => sl.name).join(" · ")}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
     </div>
   );
 }

@@ -9,7 +9,8 @@ from ..auth.security import current_user
 from ..core.evaluator import portfolio_scores
 from ..jobs.runner import enqueue
 from ..models.db import get_db
-from ..models.models import LineupRow, LineupSet, PoolVersion, User
+from ..models.models import (Game, LineupRow, LineupSet, PoolPlayer,
+                             PoolVersion, User)
 from .deps import sims_for_pool
 
 router = APIRouter(prefix="/api/slates/{slate_id}", tags=["builds"])
@@ -56,20 +57,70 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
     lineups = (db.query(LineupRow).filter_by(lineup_set_id=set_id)
                .order_by(LineupRow.ordinal).all())
 
-    # exposure table
-    counts: dict[str, dict] = {}
+    # --- exposures, enriched from the pool snapshot the set was built on ----
+    # lineup slots carry the id as a string (the solver is generic over id
+    # type); the pool keys it as an int. Normalise to str on both sides.
+    pool = {str(p.player_id): p for p in db.query(PoolPlayer)
+            .filter_by(pool_version_id=ls.pool_version_id).all()}
+    implied: dict[str, float] = {}
+    for g in db.query(Game).filter_by(slate_id=slate_id).all():
+        if g.home_implied:
+            implied[g.home] = g.home_implied
+        if g.away_implied:
+            implied[g.away] = g.away_implied
+
+    counts: dict[str, int] = {}
+    team_lineups: dict[str, int] = {}
+    team_slots: dict[str, int] = {}
     for lu in lineups:
-        for s in lu.slots:
-            if not s.get("player_id"):
+        teams_here = set()
+        for sl in lu.slots:
+            pid = sl.get("player_id")
+            if pid is None:
                 continue
-            rec = counts.setdefault(str(s["player_id"]),
-                                    {"name": s.get("name"), "count": 0})
-            rec["count"] += 1
+            pid = str(pid)
+            counts[pid] = counts.get(pid, 0) + 1
+            pp = pool.get(pid)
+            if pp:
+                team_slots[pp.team] = team_slots.get(pp.team, 0) + 1
+                teams_here.add(pp.team)
+        for t in teams_here:
+            team_lineups[t] = team_lineups.get(t, 0) + 1
+
     n = max(len(lineups), 1)
-    exposures = sorted(
-        [{"player_id": pid, "name": r["name"], "count": r["count"],
-          "exposure": round(r["count"] / n, 3)} for pid, r in counts.items()],
-        key=lambda r: -r["count"])
+    exposures = []
+    for pid, cnt in counts.items():
+        pp = pool.get(pid)
+        proj = pp.projection if pp else None
+        sal = pp.salary if pp else None
+        exposures.append({
+            "player_id": int(pid) if str(pid).isdigit() else pid,
+            "name": pp.name if pp else str(pid),
+            "position": pp.position if pp else "?",
+            "team": pp.team if pp else "",
+            "opponent": pp.opponent if pp else "",
+            "salary": sal,
+            "projection": proj,
+            "ceiling": pp.ceiling if pp else None,
+            "ownership": pp.ownership if pp else None,
+            # points per $1k -- the standard DFS value convention
+            "value": round(proj / (sal / 1000.0), 2) if proj and sal else None,
+            "implied_total": implied.get(pp.team) if pp else None,
+            "count": cnt,
+            "exposure": round(cnt / n, 4),
+        })
+    exposures.sort(key=lambda r: -r["count"])
+
+    team_exposures = sorted(
+        [{
+            "team": t,
+            "implied_total": implied.get(t),
+            "lineups": team_lineups.get(t, 0),
+            "lineup_pct": round(team_lineups.get(t, 0) / n, 4),
+            "slots": slots,
+            "slots_per_lineup": round(slots / n, 3),
+        } for t, slots in team_slots.items()],
+        key=lambda r: -r["slots"])
 
     # overlap distribution (pairwise shared-player counts)
     overlap_hist = [0] * 10
@@ -95,6 +146,8 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
             "evaluation": lu.evaluation, "is_draft": lu.is_draft,
         } for lu in lineups],
         "exposures": exposures,
+        "team_exposures": team_exposures,
+        "diagnostics": (ls.config_snapshot or {}).get("_diagnostics", {}),
         "overlap_hist": overlap_hist,
         "type_counts": type_counts,
     }

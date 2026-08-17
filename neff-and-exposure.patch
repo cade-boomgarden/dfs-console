@@ -1,0 +1,467 @@
+From 0481e03a60f4216896e50f7b2ae95a31b03fd4f8 Mon Sep 17 00:00:00 2001
+From: dev <dev@localhost>
+Date: Mon, 17 Aug 2026 00:22:02 +0000
+Subject: [PATCH] N_eff: report, stop flagging on an uncalibrated threshold;
+ exposure report
+
+Measured on the fixture slate: N_eff saturates on SLATE SIZE, not lineup
+count -- 7.2 at 20 lineups, 11.1 at 80, 11.8 at 150. The old floor
+(0.2 * n_lineups) grows linearly, so above ~60 lineups it fired
+unconditionally and carried no information. A random-selection baseline is
+also not a threshold: selecting by expected score costs diversity against
+random by construction (ratio saturates ~0.61), and that trade is the point.
+
+So: report N_eff alongside the random-selection baseline at the same set
+size, and flag only against a threshold the operator has calibrated
+(neff_ratio or neff_floor). No default.
+
+Exposure report: player exposures now carry position, team, salary,
+projection, value (pts per $1k), ownership and team implied total, filterable
+by position and sortable; new team exposure table with implied totals,
+slots per lineup, and share of lineups containing the team.
+---
+ backend/api/builds.py            |  77 +++++++++--
+ backend/jobs/optimize.py         |  38 +++++-
+ frontend/src/pages/SetDetail.tsx | 215 ++++++++++++++++++++++++-------
+ 3 files changed, 265 insertions(+), 65 deletions(-)
+
+diff --git a/backend/api/builds.py b/backend/api/builds.py
+index 87ef474..5f68678 100644
+--- a/backend/api/builds.py
++++ b/backend/api/builds.py
+@@ -9,7 +9,8 @@ from ..auth.security import current_user
+ from ..core.evaluator import portfolio_scores
+ from ..jobs.runner import enqueue
+ from ..models.db import get_db
+-from ..models.models import LineupRow, LineupSet, PoolVersion, User
++from ..models.models import (Game, LineupRow, LineupSet, PoolPlayer,
++                             PoolVersion, User)
+ from .deps import sims_for_pool
+ 
+ router = APIRouter(prefix="/api/slates/{slate_id}", tags=["builds"])
+@@ -56,20 +57,70 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
+     lineups = (db.query(LineupRow).filter_by(lineup_set_id=set_id)
+                .order_by(LineupRow.ordinal).all())
+ 
+-    # exposure table
+-    counts: dict[str, dict] = {}
++    # --- exposures, enriched from the pool snapshot the set was built on ----
++    # lineup slots carry the id as a string (the solver is generic over id
++    # type); the pool keys it as an int. Normalise to str on both sides.
++    pool = {str(p.player_id): p for p in db.query(PoolPlayer)
++            .filter_by(pool_version_id=ls.pool_version_id).all()}
++    implied: dict[str, float] = {}
++    for g in db.query(Game).filter_by(slate_id=slate_id).all():
++        if g.home_implied:
++            implied[g.home] = g.home_implied
++        if g.away_implied:
++            implied[g.away] = g.away_implied
++
++    counts: dict[str, int] = {}
++    team_lineups: dict[str, int] = {}
++    team_slots: dict[str, int] = {}
+     for lu in lineups:
+-        for s in lu.slots:
+-            if not s.get("player_id"):
++        teams_here = set()
++        for sl in lu.slots:
++            pid = sl.get("player_id")
++            if pid is None:
+                 continue
+-            rec = counts.setdefault(str(s["player_id"]),
+-                                    {"name": s.get("name"), "count": 0})
+-            rec["count"] += 1
++            pid = str(pid)
++            counts[pid] = counts.get(pid, 0) + 1
++            pp = pool.get(pid)
++            if pp:
++                team_slots[pp.team] = team_slots.get(pp.team, 0) + 1
++                teams_here.add(pp.team)
++        for t in teams_here:
++            team_lineups[t] = team_lineups.get(t, 0) + 1
++
+     n = max(len(lineups), 1)
+-    exposures = sorted(
+-        [{"player_id": pid, "name": r["name"], "count": r["count"],
+-          "exposure": round(r["count"] / n, 3)} for pid, r in counts.items()],
+-        key=lambda r: -r["count"])
++    exposures = []
++    for pid, cnt in counts.items():
++        pp = pool.get(pid)
++        proj = pp.projection if pp else None
++        sal = pp.salary if pp else None
++        exposures.append({
++            "player_id": int(pid) if str(pid).isdigit() else pid,
++            "name": pp.name if pp else str(pid),
++            "position": pp.position if pp else "?",
++            "team": pp.team if pp else "",
++            "opponent": pp.opponent if pp else "",
++            "salary": sal,
++            "projection": proj,
++            "ceiling": pp.ceiling if pp else None,
++            "ownership": pp.ownership if pp else None,
++            # points per $1k -- the standard DFS value convention
++            "value": round(proj / (sal / 1000.0), 2) if proj and sal else None,
++            "implied_total": implied.get(pp.team) if pp else None,
++            "count": cnt,
++            "exposure": round(cnt / n, 4),
++        })
++    exposures.sort(key=lambda r: -r["count"])
++
++    team_exposures = sorted(
++        [{
++            "team": t,
++            "implied_total": implied.get(t),
++            "lineups": team_lineups.get(t, 0),
++            "lineup_pct": round(team_lineups.get(t, 0) / n, 4),
++            "slots": slots,
++            "slots_per_lineup": round(slots / n, 3),
++        } for t, slots in team_slots.items()],
++        key=lambda r: -r["slots"])
+ 
+     # overlap distribution (pairwise shared-player counts)
+     overlap_hist = [0] * 10
+@@ -95,6 +146,8 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
+             "evaluation": lu.evaluation, "is_draft": lu.is_draft,
+         } for lu in lineups],
+         "exposures": exposures,
++        "team_exposures": team_exposures,
++        "diagnostics": (ls.config_snapshot or {}).get("_diagnostics", {}),
+         "overlap_hist": overlap_hist,
+         "type_counts": type_counts,
+     }
+diff --git a/backend/jobs/optimize.py b/backend/jobs/optimize.py
+index 82b9c51..34c5c41 100644
+--- a/backend/jobs/optimize.py
++++ b/backend/jobs/optimize.py
+@@ -218,8 +218,34 @@ def build_job(job_id: int) -> None:
+ 
+         # --- N_eff gate (6c / item 18) --------------------------------------------
+         neff = n_eff(scores[sel_idx]) if len(sel_idx) > 1 else float(len(sel_idx))
+-        neff_floor = float(cfg.get("neff_floor", 0.2 * n_lineups))
+-        flagged = neff < neff_floor and len(selected) >= 10
++
++        # N_eff saturates on SLATE SIZE, not lineup count: on a 12-game slate
++        # it tops out near 12 whether you build 40 lineups or 150. An absolute
++        # floor scaled to n_lineups therefore fires unconditionally on large
++        # builds and says nothing. Compare instead against what RANDOM
++        # selection from the same candidate pool achieves at the same set size
++        # -- that is the ceiling the generator can support, and falling below
++        # it means Stage B collapsed diversity that Stage A had produced.
++        k = len(sel_idx)
++        if k > 1 and len(candidates) > k:
++            rand_idx = nprng.choice(len(candidates), size=k, replace=False)
++            neff_random = float(n_eff(scores[rand_idx]))
++        else:
++            neff_random = float(neff)
++        # No default threshold. N_eff saturates on slate size, and selecting
++        # by expected score necessarily costs diversity against random
++        # selection -- that trade is the POINT, not an anomaly. Both facts make
++        # any threshold picked without calibration data wrong. So: report
++        # N_eff, report the random-selection baseline for the same set size,
++        # and flag only against a threshold the operator has calibrated on
++        # their own slates (`neff_ratio`, or a hard `neff_floor`).
++        ratio = cfg.get("neff_ratio")
++        floor = cfg.get("neff_floor")
++        flagged = False
++        if k >= 10 and ratio is not None:
++            flagged = bool(neff < float(ratio) * neff_random)
++        elif k >= 10 and floor is not None:
++            flagged = bool(neff < float(floor))
+ 
+         # --- persist ----------------------------------------------------------------
+         ctx.update(0.9, "Persisting lineup set")
+@@ -228,7 +254,12 @@ def build_job(job_id: int) -> None:
+         ls = LineupSet(
+             user_id=user_id, slate_id=pv.slate_id, pool_version_id=pv_id,
+             kind="build", label=cfg.get("label", f"Build x{n_lineups}"),
+-            config_snapshot=cfg, sims_blob_key=pv.sims_blob_key,
++            config_snapshot={**cfg, "_diagnostics": {
++                "n_candidates": len(candidates),
++                "n_eff_random_baseline": round(neff_random, 1),
++                "neff_ratio": ratio,
++            }},
++            sims_blob_key=pv.sims_blob_key,
+             n_eff=round(neff, 1), n_eff_flag=flagged, status="built",
+         )
+         db.add(ls)
+@@ -253,6 +284,7 @@ def build_job(job_id: int) -> None:
+         db.commit()
+         ctx.finish({"lineup_set_id": ls.id, "n_lineups": len(selected),
+                     "n_candidates": len(candidates), "n_eff": round(neff, 1),
++                    "n_eff_random": round(neff_random, 1),
+                     "n_eff_flagged": flagged})
+     except JobCancelled:
+         raise
+diff --git a/frontend/src/pages/SetDetail.tsx b/frontend/src/pages/SetDetail.tsx
+index 31c5869..501810d 100644
+--- a/frontend/src/pages/SetDetail.tsx
++++ b/frontend/src/pages/SetDetail.tsx
+@@ -1,71 +1,165 @@
++import { useMemo, useState } from "react";
+ import { useQuery } from "@tanstack/react-query";
+ import { useParams } from "react-router-dom";
+ import { api, LineupDTO } from "../api";
+ import { Badge, DistStrip, money, num } from "../ui";
+ 
++interface Exposure {
++  player_id: number; name: string; position: string; team: string;
++  opponent: string; salary: number | null; projection: number | null;
++  ceiling: number | null; ownership: number | null; value: number | null;
++  implied_total: number | null; count: number; exposure: number;
++}
++interface TeamExposure {
++  team: string; implied_total: number | null; lineups: number;
++  lineup_pct: number; slots: number; slots_per_lineup: number;
++}
+ interface Detail {
+   id: number; kind: string; label: string; n_eff: number | null; n_eff_flag: boolean;
+-  lineups: LineupDTO[];
+-  exposures: { player_id: string; name: string; count: number; exposure: number }[];
++  lineups: LineupDTO[]; exposures: Exposure[]; team_exposures: TeamExposure[];
++  diagnostics: { n_eff_random_baseline?: number; n_candidates?: number };
+   overlap_hist: number[]; type_counts: Record<string, number>;
+ }
+ 
++const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
++type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
++
++function Bar({ pct }: { pct: number }) {
++  return (
++    <div className="w-14 h-1.5 bg-[var(--raised)] rounded inline-block align-middle">
++      <div className="h-full bg-[var(--ink)] rounded" style={{ width: `${Math.min(pct * 100, 100)}%` }} />
++    </div>
++  );
++}
++
+ export default function SetDetail() {
+   const { slateId, setId } = useParams();
+   const d = useQuery({ queryKey: ["set", setId],
+     queryFn: () => api.get<Detail>(`/api/slates/${slateId}/sets/${setId}`) });
++  const [pos, setPos] = useState<string>("ALL");
++  const [sort, setSort] = useState<SortKey>("exposure");
++
++  const rows = useMemo(() => {
++    const list = (d.data?.exposures ?? []).filter((e) => pos === "ALL" || e.position === pos);
++    return [...list].sort((a, b) => (Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity)));
++  }, [d.data, pos, sort]);
++
+   if (!d.data) return null;
+   const s = d.data;
+   const maxOv = Math.max(...s.overlap_hist, 1);
++  const baseline = s.diagnostics?.n_eff_random_baseline;
++
++  const Th = ({ k, children, right }: { k?: SortKey; children: React.ReactNode; right?: boolean }) => (
++    <th onClick={k ? () => setSort(k) : undefined}
++      className={`px-2 py-1.5 text-[10px] uppercase tracking-wider text-[var(--dim)] whitespace-nowrap
++        ${right ? "text-right" : "text-left"} ${k ? "cursor-pointer select-none" : ""}`}>
++      {children}{k && sort === k ? " ↓" : ""}
++    </th>
++  );
++
+   return (
+     <div className="space-y-5">
+-      <div className="flex items-center gap-3">
+-        <h1 className="text-lg font-semibold">{s.label}</h1>
++      <div className="flex items-center gap-3 flex-wrap">
++        <h1 className="text-lg font-bold">{s.label}</h1>
+         <Badge>{s.kind}</Badge>
++        <span className="num text-[var(--dim)]">{s.lineups.length} lineups</span>
+         {s.n_eff !== null && (
+-          <span className="num">N<sub>eff</sub>{" "}
+-            <span className={s.n_eff_flag ? "text-[var(--down)]" : "text-[var(--up)]"}>{num(s.n_eff)}</span>
++          <span className="num" title="Effective number of independent lineups, from the eigenvalues of the score covariance">
++            N<sub>eff</sub> <span className="text-[var(--ink)]">{num(s.n_eff)}</span>
++            {baseline != null && (
++              <span className="text-[var(--dim)]"> / {num(baseline)} random</span>
++            )}
+           </span>
+         )}
+-        {s.n_eff_flag && <Badge tone="down">Stage A producing lookalikes — widen skeleton spread</Badge>}
++        {s.n_eff_flag && <Badge>below your calibrated floor</Badge>}
+       </div>
+ 
+-      <div className="grid grid-cols-[1fr_280px] gap-4">
+-        <div className="panel overflow-auto max-h-[70vh]">
+-          <table className="w-full">
+-            <thead className="sticky top-0 bg-[var(--panel)]">
+-              <tr className="border-b hairline">
+-                {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
+-                  <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
+-                ))}
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {s.lineups.map((lu) => (
+-                <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
+-                  <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
+-                  <td className="px-2 py-1.5">
+-                    <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
+-                      floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
+-                  </td>
+-                  <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
+-                  <td className="px-2 py-1.5 num text-[var(--up)]">{num(lu.ceiling)}</td>
+-                  <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
+-                  <td className="px-2 py-1.5 num">{num(lu.ownership, 0)}%</td>
+-                  <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
+-                  <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
+-                    {lu.slots.map((sl) => sl.name).join(" · ")}
+-                  </td>
+-                </tr>
++      {/* ---------------- exposure report ---------------- */}
++      <section className="grid grid-cols-[1fr_360px] gap-4 items-start">
++        <div className="panel">
++          <div className="flex items-center gap-2 px-3 py-2 border-b hairline">
++            <span className="eyebrow">Player exposure</span>
++            <div className="ml-auto flex gap-1">
++              {POSITIONS.map((p) => (
++                <button key={p} onClick={() => setPos(p)}
++                  className={`px-2 py-0.5 rounded text-xs ${pos === p ? "bg-[var(--raised)] text-[var(--ink)]" : "text-[var(--dim)] hover:text-[var(--ink)]"}`}>
++                  {p}
++                </button>
+               ))}
+-            </tbody>
+-          </table>
++            </div>
++          </div>
++          <div className="overflow-auto max-h-[62vh]">
++            <table className="w-full">
++              <thead className="sticky top-0 bg-[var(--panel)]">
++                <tr className="border-b hairline">
++                  <Th>Player</Th><Th>Pos</Th><Th>Tm</Th>
++                  <Th k="salary" right>Salary</Th>
++                  <Th k="projection" right>Proj</Th>
++                  <Th k="value" right>Val</Th>
++                  <Th k="ownership" right>Own%</Th>
++                  <Th right>Impl</Th>
++                  <Th k="exposure" right>Exposure</Th>
++                </tr>
++              </thead>
++              <tbody>
++                {rows.map((e) => (
++                  <tr key={e.player_id} className="border-b hairline hover:bg-[var(--raised)]">
++                    <td className="px-2 py-1 whitespace-nowrap">{e.name}</td>
++                    <td className="px-2 py-1 text-[var(--dim)]">{e.position}</td>
++                    <td className="px-2 py-1 text-[var(--dim)]">{e.team}</td>
++                    <td className="px-2 py-1 text-right num">{money(e.salary)}</td>
++                    <td className="px-2 py-1 text-right num">{num(e.projection)}</td>
++                    <td className="px-2 py-1 text-right num">{num(e.value, 2)}</td>
++                    <td className="px-2 py-1 text-right num text-[var(--dim)]">{num(e.ownership)}</td>
++                    <td className="px-2 py-1 text-right num text-[var(--dim)]">{num(e.implied_total)}</td>
++                    <td className="px-2 py-1 text-right num whitespace-nowrap">
++                      <Bar pct={e.exposure} />
++                      <span className="ml-2">{(e.exposure * 100).toFixed(0)}%</span>
++                      <span className="ml-1 text-[var(--mute)]">({e.count})</span>
++                    </td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          </div>
++          <div className="px-3 py-1.5 text-[10px] text-[var(--dim)] border-t hairline">
++            {rows.length} players · Val = projected points per $1,000 · Impl = team implied total
++          </div>
+         </div>
+ 
+         <div className="space-y-4">
++          <div className="panel">
++            <div className="px-3 py-2 border-b hairline eyebrow">Team exposure</div>
++            <div className="overflow-auto max-h-[38vh]">
++              <table className="w-full">
++                <thead className="sticky top-0 bg-[var(--panel)]">
++                  <tr className="border-b hairline">
++                    <Th>Team</Th><Th right>Impl</Th><Th right>Slots/LU</Th><Th right>In lineups</Th>
++                  </tr>
++                </thead>
++                <tbody>
++                  {s.team_exposures.map((t) => (
++                    <tr key={t.team} className="border-b hairline hover:bg-[var(--raised)]">
++                      <td className="px-2 py-1">{t.team}</td>
++                      <td className="px-2 py-1 text-right num">{num(t.implied_total)}</td>
++                      <td className="px-2 py-1 text-right num">{num(t.slots_per_lineup, 2)}</td>
++                      <td className="px-2 py-1 text-right num whitespace-nowrap">
++                        <Bar pct={t.lineup_pct} />
++                        <span className="ml-2">{(t.lineup_pct * 100).toFixed(0)}%</span>
++                      </td>
++                    </tr>
++                  ))}
++                </tbody>
++              </table>
++            </div>
++            <div className="px-3 py-1.5 text-[10px] text-[var(--dim)] border-t hairline">
++              Slots/LU = average players from that team per lineup
++            </div>
++          </div>
++
+           <div className="panel p-3">
+             <div className="eyebrow mb-2">Pairwise overlap</div>
+-            <div className="flex items-end gap-0.5 h-16">
++            <div className="flex items-end gap-0.5 h-14">
+               {s.overlap_hist.map((c, i) => (
+                 <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
+                   <div className="w-full bg-[var(--chart)]" style={{ height: `${(c / maxOv) * 100}%` }} />
+@@ -74,6 +168,7 @@ export default function SetDetail() {
+               ))}
+             </div>
+           </div>
++
+           <div className="panel p-3">
+             <div className="eyebrow mb-2">Lineup types</div>
+             {Object.entries(s.type_counts).sort((a, b) => b[1] - a[1]).map(([t, c]) => (
+@@ -82,20 +177,40 @@ export default function SetDetail() {
+               </div>
+             ))}
+           </div>
+-          <div className="panel p-3 max-h-72 overflow-auto">
+-            <div className="eyebrow mb-2">Exposure</div>
+-            {s.exposures.slice(0, 40).map((e) => (
+-              <div key={e.player_id} className="flex items-center gap-2 text-[11px] py-0.5">
+-                <span className="flex-1 truncate">{e.name}</span>
+-                <div className="w-16 h-1.5 bg-[var(--raised)] rounded">
+-                  <div className="h-full bg-[var(--amber)] rounded" style={{ width: `${e.exposure * 100}%` }} />
+-                </div>
+-                <span className="num w-10 text-right">{(e.exposure * 100).toFixed(0)}%</span>
+-              </div>
+-            ))}
+-          </div>
+         </div>
+-      </div>
++      </section>
++
++      {/* ---------------- lineups ---------------- */}
++      <section className="panel overflow-auto max-h-[60vh]">
++        <table className="w-full">
++          <thead className="sticky top-0 bg-[var(--panel)]">
++            <tr className="border-b hairline">
++              {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
++                <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
++              ))}
++            </tr>
++          </thead>
++          <tbody>
++            {s.lineups.map((lu) => (
++              <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
++                <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
++                <td className="px-2 py-1.5">
++                  <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
++                    floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
++                </td>
++                <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
++                <td className="px-2 py-1.5 num">{num(lu.ceiling)}</td>
++                <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
++                <td className="px-2 py-1.5 num">{num(lu.ownership, 0)}%</td>
++                <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
++                <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
++                  {lu.slots.map((sl) => sl.name).join(" · ")}
++                </td>
++              </tr>
++            ))}
++          </tbody>
++        </table>
++      </section>
+     </div>
+   );
+ }
+-- 
+2.43.0
+

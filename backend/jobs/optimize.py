@@ -218,8 +218,34 @@ def build_job(job_id: int) -> None:
 
         # --- N_eff gate (6c / item 18) --------------------------------------------
         neff = n_eff(scores[sel_idx]) if len(sel_idx) > 1 else float(len(sel_idx))
-        neff_floor = float(cfg.get("neff_floor", 0.2 * n_lineups))
-        flagged = neff < neff_floor and len(selected) >= 10
+
+        # N_eff saturates on SLATE SIZE, not lineup count: on a 12-game slate
+        # it tops out near 12 whether you build 40 lineups or 150. An absolute
+        # floor scaled to n_lineups therefore fires unconditionally on large
+        # builds and says nothing. Compare instead against what RANDOM
+        # selection from the same candidate pool achieves at the same set size
+        # -- that is the ceiling the generator can support, and falling below
+        # it means Stage B collapsed diversity that Stage A had produced.
+        k = len(sel_idx)
+        if k > 1 and len(candidates) > k:
+            rand_idx = nprng.choice(len(candidates), size=k, replace=False)
+            neff_random = float(n_eff(scores[rand_idx]))
+        else:
+            neff_random = float(neff)
+        # No default threshold. N_eff saturates on slate size, and selecting
+        # by expected score necessarily costs diversity against random
+        # selection -- that trade is the POINT, not an anomaly. Both facts make
+        # any threshold picked without calibration data wrong. So: report
+        # N_eff, report the random-selection baseline for the same set size,
+        # and flag only against a threshold the operator has calibrated on
+        # their own slates (`neff_ratio`, or a hard `neff_floor`).
+        ratio = cfg.get("neff_ratio")
+        floor = cfg.get("neff_floor")
+        flagged = False
+        if k >= 10 and ratio is not None:
+            flagged = bool(neff < float(ratio) * neff_random)
+        elif k >= 10 and floor is not None:
+            flagged = bool(neff < float(floor))
 
         # --- persist ----------------------------------------------------------------
         ctx.update(0.9, "Persisting lineup set")
@@ -228,7 +254,12 @@ def build_job(job_id: int) -> None:
         ls = LineupSet(
             user_id=user_id, slate_id=pv.slate_id, pool_version_id=pv_id,
             kind="build", label=cfg.get("label", f"Build x{n_lineups}"),
-            config_snapshot=cfg, sims_blob_key=pv.sims_blob_key,
+            config_snapshot={**cfg, "_diagnostics": {
+                "n_candidates": len(candidates),
+                "n_eff_random_baseline": round(neff_random, 1),
+                "neff_ratio": ratio,
+            }},
+            sims_blob_key=pv.sims_blob_key,
             n_eff=round(neff, 1), n_eff_flag=flagged, status="built",
         )
         db.add(ls)
@@ -253,6 +284,7 @@ def build_job(job_id: int) -> None:
         db.commit()
         ctx.finish({"lineup_set_id": ls.id, "n_lineups": len(selected),
                     "n_candidates": len(candidates), "n_eff": round(neff, 1),
+                    "n_eff_random": round(neff_random, 1),
                     "n_eff_flagged": flagged})
     except JobCancelled:
         raise
