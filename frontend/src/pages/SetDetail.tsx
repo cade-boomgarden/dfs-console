@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, LineupDTO } from "../api";
-import { Badge, DistStrip, money, num } from "../ui";
+import { Badge, DistStrip, distDomain, distMaxDensity, money, num } from "../ui";
 
 interface Exposure {
   player_id: number; name: string; position: string; team: string;
@@ -62,6 +62,9 @@ export default function SetDetail() {
         : (lu[luSort] as number ?? 0);
     return [...list].sort((a, b) => (luDesc ? val(b) - val(a) : val(a) - val(b)));
   }, [d.data, luSort, luDesc, luType, luQuery]);
+
+  const domain = useMemo(() => distDomain(d.data?.lineups ?? []), [d.data]);
+  const yMax = useMemo(() => distMaxDensity(d.data?.lineups ?? []), [d.data]);
 
   if (!d.data) return null;
   const s = d.data;
@@ -217,7 +220,7 @@ export default function SetDetail() {
         <table className="w-full">
           <thead className="sticky top-0 bg-[var(--panel)]">
             <tr className="border-b hairline">
-              {([["ordinal", "#"], [null, "Distribution"], ["median", "Med"],
+              {([["ordinal", "#"], [null, `Distribution ${domain ? `(${domain[0].toFixed(0)}–${domain[1].toFixed(0)})` : ""}`], ["median", "Med"],
                  ["projection", "Proj"], ["ceiling", "Ceil"], ["salary", "Sal"],
                  ["ownership", "Own"], [null, "Type"], [null, "Lineup"]] as
                  [LineupSortKey | null, string][]).map(([k, h]) => (
@@ -235,7 +238,8 @@ export default function SetDetail() {
                 <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
                 <td className="px-2 py-1.5">
                   <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
-                    floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
+                    floor={lu.evaluation.floor} median={lu.evaluation.median}
+                    ceiling={lu.evaluation.ceiling} domain={domain} yMax={yMax} />
                 </td>
                 <td className="px-2 py-1.5 num">{num(lu.evaluation.median)}</td>
                 <td className="px-2 py-1.5 num">{num(lu.projection)}</td>

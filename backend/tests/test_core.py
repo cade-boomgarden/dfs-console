@@ -116,3 +116,17 @@ def test_shape_labels_match_classify():
     for (t, b), want in cases.items():
         assert Skeleton("KC", "BUF", "g0", t, b, False).shape_label == want
         assert Skeleton("KC", "BUF", "g0", t, b, False).shape_key == f"{t}-{b}"
+
+
+def test_position_limits_tighten_but_never_loosen():
+    pool = make_pool()
+    rules = RosterRules()
+    lus = build(pool, BuildConfig(n_lineups=3, seed=4,
+                                  position_limits={"TE": 1}), rules)
+    for lu in lus:
+        assert sum(1 for p in lu.players if p.position is Position.TE) == 1
+    # a cap below what the slots require is infeasible, loudly
+    import pytest
+    from backend.core.solver import InfeasibleError
+    with pytest.raises(InfeasibleError):
+        build(pool, BuildConfig(n_lineups=1, position_limits={"WR": 2}), rules)

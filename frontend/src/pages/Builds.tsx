@@ -22,6 +22,9 @@ export default function Builds() {
   const [job, setJob] = useState<Job | null>(null);
   const [shapes, setShapes] = useState<Record<string, number>>({ ...MODEL_DEFAULT });
   const [dstWithQb, setDstWithQb] = useState(0.25);
+  const [posLimits, setPosLimits] = useState<Record<string, number | "">>({
+    RB: "", WR: "", TE: "",
+  });
 
   const pv = slate.data?.pool_versions?.find((v: any) => v.is_current);
 
@@ -33,6 +36,8 @@ export default function Builds() {
         label: cfg.label || `Build x${cfg.n_lineups}`,
         shape_allocation: shapes,
         dst_with_qb_weight: dstWithQb,
+        position_limits: Object.fromEntries(
+          Object.entries(posLimits).filter(([, v]) => v !== "" && Number(v) > 0)),
       },
     });
     watchJob(job_id, (j) => {
@@ -59,6 +64,22 @@ export default function Builds() {
         </div>
         <div className="border-t hairline pt-3">
           <ShapeAllocation value={shapes} onChange={setShapes} />
+          <div className="mt-3 flex items-end gap-4 flex-wrap">
+            <div className="flex items-end gap-2">
+              <span className="eyebrow pb-1">Max per position</span>
+              {(["RB", "WR", "TE"] as const).map((p) => (
+                <label key={p} className="flex flex-col gap-0.5">
+                  <span className="text-[10px] text-[var(--dim)] text-center">{p}</span>
+                  <input type="number" min={1} max={5} className="w-14 text-right"
+                    value={posLimits[p]} placeholder="—"
+                    onChange={(e) => setPosLimits({ ...posLimits, [p]: e.target.value === "" ? "" : Number(e.target.value) })} />
+                </label>
+              ))}
+              <span className="text-[10px] text-[var(--dim)] pb-1 max-w-xs">
+                caps the FLEX. TE=1 forbids a TE in FLEX; blank leaves the slot open
+              </span>
+            </div>
+          </div>
           <div className="mt-2 flex items-center gap-2">
             <span className="eyebrow">DST with QB</span>
             <input type="number" step={0.05} min={0} className="w-20"

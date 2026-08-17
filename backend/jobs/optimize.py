@@ -148,6 +148,8 @@ def build_job(job_id: int) -> None:
         candidates: list = []
 
         base_cfg = dict(
+            position_limits={k: int(v) for k, v in
+                             (cfg.get("position_limits") or {}).items()},
             locked_ids=locked,
             max_ownership=cfg.get("max_ownership"),
             no_opposing_dst=bool(cfg.get("no_opposing_dst", True)),

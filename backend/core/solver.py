@@ -165,6 +165,9 @@ class BuildConfig:
     groups: list[GroupRule] = field(default_factory=list)
     max_ownership: float | None = None   # sum of projected ownership
     no_opposing_dst: bool = True         # DST never faces our QB/RB
+    # Tighten the position bounds the slots already imply. {"TE": 1} forbids a
+    # TE in FLEX; {"RB": 3} allows at most one RB there. Can only tighten.
+    position_limits: dict[str, int] = field(default_factory=dict)
 
     seed: int | None = None
 
@@ -242,6 +245,19 @@ def build(
         if pid not in by_id:
             raise InfeasibleError(f"locked player {pid!r} is not in the pool")
 
+    # Validate configuration BEFORE the loop. The loop catches InfeasibleError
+    # to stop when diversification exhausts the pool, which would otherwise
+    # swallow a config error and return an empty set with no explanation.
+    for pos_name, cap in cfg.position_limits.items():
+        match = next((p for p in rules.position_bounds() if p.value == pos_name), None)
+        if match is None:
+            raise InfeasibleError(f"unknown position in position_limits: {pos_name!r}")
+        lo, _ = rules.position_bounds()[match]
+        if int(cap) < lo:
+            raise InfeasibleError(
+                f"position_limits caps {pos_name} at {cap}, below the {lo} the "
+                f"roster slots require")
+
     lineups: list[Lineup] = []
     usage: dict[str, int] = {p.id: 0 for p in players}
     qb_usage: dict[str, int] = {}
@@ -314,6 +330,13 @@ def _solve_one(
             if lo:
                 raise InfeasibleError(f"no {pos.value} available in pool")
             continue
+        cap = cfg.position_limits.get(pos.value)
+        if cap is not None:
+            hi = min(hi, int(cap))          # can tighten, never loosen
+            if hi < lo:
+                raise InfeasibleError(
+                    f"position_limits caps {pos.value} at {cap}, below the "
+                    f"{lo} the roster slots require")
         model.Add(sum(members) >= lo)
         model.Add(sum(members) <= hi)
 
