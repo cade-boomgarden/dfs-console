@@ -1,0 +1,1977 @@
+From 4abf4ddb8aa8528ea9ca38d680c6c0ac85c838e4 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 17 Aug 2026 02:28:44 +0000
+Subject: [PATCH 1/2] Profile system: continuous features, EW + shrinkage, cold
+ start (item 12)
+
+- core/profiles.py: feature registry (14d), EW ratio-of-sums with 4-game
+  half-life, empirical-Bayes shrinkage by opportunity count (14e), cold
+  start from projection proxies + draft capital (14f), display-only
+  archetype labels (14b)
+- core/allocation.py: profile -> Dispersion and -> AllocationShares with
+  posterior_n (parameter uncertainty, 1f) and weekly_phi (game-script
+  share variation) for the item-14 hierarchical sim
+- variance.py: td_inflation replaced with td_k (NB); the old scaled-Poisson
+  scheme had inverted semantics (t>1 narrowed) and drew fractional TDs
+- ProfileSnapshot model + migration; players.draft_pick for cold start
+- POST /api/profiles/import + GET /api/profiles
+- simulate job: per-player profile-driven dispersion, cold-start fallback
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBMcj942YrXqW5nEGK36s6
+---
+ .../a41f7c02d911_profile_snapshots.py         |  43 ++
+ backend/api/profiles.py                       |  75 ++++
+ backend/core/allocation.py                    | 170 +++++++
+ backend/core/profiles.py                      | 416 ++++++++++++++++++
+ backend/core/variance.py                      |  12 +-
+ backend/jobs/simulate.py                      |  63 ++-
+ backend/main.py                               |   4 +-
+ backend/models/models.py                      |  24 +
+ backend/tests/test_profiles.py                | 174 ++++++++
+ 9 files changed, 971 insertions(+), 10 deletions(-)
+ create mode 100644 alembic/versions/a41f7c02d911_profile_snapshots.py
+ create mode 100644 backend/api/profiles.py
+ create mode 100644 backend/core/allocation.py
+ create mode 100644 backend/core/profiles.py
+ create mode 100644 backend/tests/test_profiles.py
+
+diff --git a/alembic/versions/a41f7c02d911_profile_snapshots.py b/alembic/versions/a41f7c02d911_profile_snapshots.py
+new file mode 100644
+index 0000000..f63021e
+--- /dev/null
++++ b/alembic/versions/a41f7c02d911_profile_snapshots.py
+@@ -0,0 +1,43 @@
++"""profile snapshots + draft capital (build item 12)
++
++Revision ID: a41f7c02d911
++Revises: cf96632c5905
++Create Date: 2026-08-17
++"""
++from alembic import op
++import sqlalchemy as sa
++
++
++revision = 'a41f7c02d911'
++down_revision = 'cf96632c5905'
++branch_labels = None
++depends_on = None
++
++
++def upgrade() -> None:
++    op.create_table(
++        'profile_snapshots',
++        sa.Column('id', sa.Integer(), nullable=False),
++        sa.Column('gsis_id', sa.String(length=16), nullable=False),
++        sa.Column('season', sa.Integer(), nullable=False),
++        sa.Column('week', sa.Integer(), nullable=False),
++        sa.Column('name', sa.String(length=128), nullable=False),
++        sa.Column('position', sa.String(length=8), nullable=False),
++        sa.Column('team', sa.String(length=8), nullable=False),
++        sa.Column('features', sa.JSON(), nullable=False),
++        sa.Column('opportunities', sa.JSON(), nullable=False),
++        sa.Column('games', sa.Integer(), nullable=False),
++        sa.Column('label', sa.String(length=32), nullable=False),
++        sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
++        sa.PrimaryKeyConstraint('id'),
++        sa.UniqueConstraint('gsis_id', 'season', 'week'),
++    )
++    op.create_index(op.f('ix_profile_snapshots_gsis_id'), 'profile_snapshots',
++                    ['gsis_id'], unique=False)
++    op.add_column('players', sa.Column('draft_pick', sa.Integer(), nullable=True))
++
++
++def downgrade() -> None:
++    op.drop_column('players', 'draft_pick')
++    op.drop_index(op.f('ix_profile_snapshots_gsis_id'), table_name='profile_snapshots')
++    op.drop_table('profile_snapshots')
+diff --git a/backend/api/profiles.py b/backend/api/profiles.py
+new file mode 100644
+index 0000000..043a0a3
+--- /dev/null
++++ b/backend/api/profiles.py
+@@ -0,0 +1,75 @@
++"""Player profile import + inspection (build item 12, section 14).
++
++The artifact comes from `scripts/build_profiles.py` (offline -- the running
++app never queries pbp; profiles arrive as data). Import is idempotent:
++re-uploading the same (season, week) replaces those rows.
++"""
++from __future__ import annotations
++
++import json
++
++from fastapi import APIRouter, Depends, HTTPException, UploadFile
++from sqlalchemy.orm import Session
++
++from ..auth.security import current_user
++from ..models.db import get_db
++from ..models.models import PlayerCanonical, ProfileSnapshot, User
++
++router = APIRouter(prefix="/api/profiles", tags=["profiles"])
++
++
++@router.post("/import")
++async def import_profiles(file: UploadFile,
++                          db: Session = Depends(get_db),
++                          user: User = Depends(current_user)):
++    try:
++        artifact = json.loads(await file.read())
++        meta = artifact["meta"]
++        season, week = int(meta["season"]), int(meta["week"])
++        profiles = artifact["profiles"]
++    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
++        raise HTTPException(422, f"not a profile artifact: {e}")
++
++    (db.query(ProfileSnapshot)
++       .filter_by(season=season, week=week).delete())
++    for p in profiles:
++        db.add(ProfileSnapshot(
++            gsis_id=p["gsis_id"], season=season, week=week,
++            name=p.get("name", ""), position=p.get("position", ""),
++            team=p.get("team", ""), features=p.get("features", {}),
++            opportunities=p.get("opportunities", {}),
++            games=int(p.get("games", 0)), label=p.get("label", ""),
++        ))
++
++    draft = artifact.get("draft_capital", {})
++    draft_set = 0
++    if draft:
++        for row in (db.query(PlayerCanonical)
++                    .filter(PlayerCanonical.gsis_id.in_(list(draft.keys())))
++                    .all()):
++            row.draft_pick = int(draft[row.gsis_id])
++            draft_set += 1
++
++    db.commit()
++    return {"season": season, "week": week, "profiles": len(profiles),
++            "draft_capital_set": draft_set}
++
++
++@router.get("")
++def list_profiles(position: str | None = None,
++                  db: Session = Depends(get_db),
++                  user: User = Depends(current_user)):
++    """Latest snapshot per player, newest as-of week first."""
++    latest = (db.query(ProfileSnapshot.season, ProfileSnapshot.week)
++              .order_by(ProfileSnapshot.season.desc(), ProfileSnapshot.week.desc())
++              .first())
++    if latest is None:
++        return {"season": None, "week": None, "profiles": []}
++    q = db.query(ProfileSnapshot).filter_by(season=latest[0], week=latest[1])
++    if position:
++        q = q.filter_by(position=position.upper())
++    rows = q.order_by(ProfileSnapshot.name).all()
++    return {"season": latest[0], "week": latest[1], "profiles": [
++        {"gsis_id": r.gsis_id, "name": r.name, "position": r.position,
++         "team": r.team, "label": r.label, "games": r.games,
++         "features": r.features} for r in rows]}
+diff --git a/backend/core/allocation.py b/backend/core/allocation.py
+new file mode 100644
+index 0000000..45be4fc
+--- /dev/null
++++ b/backend/core/allocation.py
+@@ -0,0 +1,170 @@
++"""Usage shares + dispersion from profiles (build items 12/13, section 14).
++
++Maps a `PlayerProfile` onto the two things downstream models consume:
++
++* `Dispersion` for `variance.py` -- fitted per-position, adjusted by role
++  features so a player's *shape* follows his profile, not a position cliff.
++* `AllocationShares` for the hierarchical sim (item 14) -- usage shares plus
++  the two precisions that govern how they vary:
++
++    - `posterior_n`: evidence behind the share estimate, in denominator
++      units. Parameter uncertainty (1f) draws the player's *true* share from
++      Beta(mean=share, precision=posterior_n) -- thin history, wide draw.
++    - `weekly_phi`: fitted week-to-week precision of the *realised* share
++      around the true share. Irreducible game-script variation; does not
++      shrink with sample size.
++
++Coefficients are fitted offline (`scripts/fit_allocation.py`) and shipped as
++data in `core/data/allocation_coeffs.json` -- the running app never touches
++pbp. `AllocationCoeffs.load()` falls back to conservative defaults when the
++fitted file is absent, so core stays importable in a bare sandbox.
++"""
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from pathlib import Path
++
++from .profiles import PlayerProfile
++from .variance import Dispersion
++
++_DATA_FILE = Path(__file__).parent / "data" / "allocation_coeffs.json"
++
++# Conservative defaults, used only when no fitted file is shipped.
++_DEFAULT_DISPERSION: dict[str, dict[str, float]] = {
++    "QB": {"att_k": 12.0, "tgt_k": 6.0, "ypc_cv": 0.55, "ypr_cv": 0.65,
++           "ypa_cv": 0.30, "cmp_k": 25.0, "td_k": 8.0},
++    "RB": {"att_k": 12.0, "tgt_k": 6.0, "ypc_cv": 0.55, "ypr_cv": 0.65,
++           "ypa_cv": 0.30, "cmp_k": 25.0, "td_k": 8.0},
++    "WR": {"att_k": 12.0, "tgt_k": 6.0, "ypc_cv": 0.55, "ypr_cv": 0.65,
++           "ypa_cv": 0.30, "cmp_k": 25.0, "td_k": 8.0},
++    "TE": {"att_k": 12.0, "tgt_k": 6.0, "ypc_cv": 0.55, "ypr_cv": 0.65,
++           "ypa_cv": 0.30, "cmp_k": 25.0, "td_k": 8.0},
++}
++_DEFAULT_WEEKLY_PHI: dict[str, dict[str, float]] = {
++    "RB": {"carry_share": 12.0, "target_share": 25.0, "gl_carry_share": 3.0},
++    "WR": {"target_share": 30.0, "air_yards_share": 20.0, "ez_target_share": 5.0},
++    "TE": {"target_share": 30.0, "air_yards_share": 20.0, "ez_target_share": 5.0},
++    "QB": {},
++}
++
++
++@dataclass(frozen=True)
++class AllocationCoeffs:
++    """Fitted coefficients, shipped as data (item 13 output)."""
++    dispersion: dict          # position -> Dispersion field values
++    weekly_phi: dict          # position -> share name -> Beta precision
++    priors: dict              # position -> feature -> prior mean (overrides POSITION_PRIORS)
++    meta: dict
++
++    @classmethod
++    def load(cls, path: Path | None = None) -> "AllocationCoeffs":
++        p = path or _DATA_FILE
++        if p.exists():
++            blob = json.loads(p.read_text())
++            return cls(
++                dispersion=blob.get("dispersion", _DEFAULT_DISPERSION),
++                weekly_phi=blob.get("weekly_phi", _DEFAULT_WEEKLY_PHI),
++                priors=blob.get("priors", {}),
++                meta=blob.get("meta", {}),
++            )
++        return cls(dispersion=_DEFAULT_DISPERSION, weekly_phi=_DEFAULT_WEEKLY_PHI,
++                   priors={}, meta={"fitted": False})
++
++
++def dispersion_for(
++    position: str,
++    coeffs: AllocationCoeffs,
++    profile: PlayerProfile | None = None,
++    variance_scale: float = 1.0,
++) -> Dispersion:
++    """Per-player Dispersion: fitted position base, adjusted by profile.
++
++    Adjustments are deliberately few and monotone -- each one encodes a
++    mechanism, not a curve-fit:
++
++    * Committee backs (low carry share) have more overdispersed carry counts
++      than bellcows: their workload swings with game script.
++    * Thin-target players (low targets_per_dropback) have more overdispersed
++      reception counts than high-participation targets.
++    * Deep-aDOT receivers have higher per-catch variance (ypr_cv).
++
++    `variance_scale` is the existing per-player override (questionable tag);
++    it widens efficiency CVs and count overdispersion together.
++    """
++    # fitted files carry only the fields relevant to each position (a QB has
++    # no fitted tgt_k); everything else falls back to the defaults.
++    defaults = _DEFAULT_DISPERSION.get(position, _DEFAULT_DISPERSION["RB"])
++    base = {**defaults, **(coeffs.dispersion.get(position) or {})}
++    att_k = base["att_k"]
++    tgt_k = base["tgt_k"]
++    ypc_cv = base["ypc_cv"]
++    ypr_cv = base["ypr_cv"]
++    ypa_cv = base["ypa_cv"]
++    cmp_k = base["cmp_k"]
++    td_k = base.get("td_k", 8.0)
++
++    if profile is not None:
++        f = profile.features
++        if position == "RB":
++            # carry_share 0.7 -> ~1.5x k (steadier); 0.2 -> ~0.6x k (swingier)
++            cs = f.get("carry_share", 0.35)
++            att_k *= 0.45 + 1.5 * cs
++        if position in ("RB", "WR", "TE"):
++            tpd = f.get("targets_per_dropback", 0.08)
++            tgt_k *= 0.55 + 3.5 * tpd
++            adot = f.get("rec_adot", 8.0)
++            # aDOT 15 -> ~1.2x ypr_cv; aDOT 3 -> ~0.9x
++            ypr_cv *= 0.83 + 0.025 * max(adot, 0.0)
++
++    if variance_scale != 1.0:
++        s = max(variance_scale, 0.1)
++        ypc_cv *= s
++        ypr_cv *= s
++        ypa_cv *= s
++        att_k /= s
++        tgt_k /= s
++        td_k /= s
++
++    return Dispersion(att_k=att_k, tgt_k=tgt_k, ypc_cv=ypc_cv, ypr_cv=ypr_cv,
++                      ypa_cv=ypa_cv, cmp_k=cmp_k, td_k=td_k)
++
++
++@dataclass(frozen=True)
++class AllocationShares:
++    """Usage shares + precisions for the hierarchical sim (item 14)."""
++    carry_share: float = 0.0
++    target_share: float = 0.0
++    targets_per_dropback: float = 0.0
++    gl_carry_share: float = 0.0
++    ez_target_share: float = 0.0
++    air_yards_share: float = 0.0
++    # precision of the *estimate* (parameter uncertainty, 1f) per share
++    posterior_n: dict | None = None
++    # fitted week-to-week precision of the *realised* share per share name
++    weekly_phi: dict | None = None
++
++
++def shares_for(profile: PlayerProfile, coeffs: AllocationCoeffs) -> AllocationShares:
++    f = profile.features
++    opp = profile.opportunities
++    phi = coeffs.weekly_phi.get(profile.position, {})
++
++    def post_n(feature: str, k: float) -> float:
++        return opp.get(feature, 0.0) + k
++
++    return AllocationShares(
++        carry_share=f.get("carry_share", 0.0),
++        target_share=f.get("target_share", 0.0),
++        targets_per_dropback=f.get("targets_per_dropback", 0.0),
++        gl_carry_share=f.get("gl_carry_share", 0.0),
++        ez_target_share=f.get("ez_target_share", 0.0),
++        air_yards_share=f.get("air_yards_share", 0.0),
++        posterior_n={
++            "carry_share": post_n("carry_share", 30),
++            "target_share": post_n("target_share", 40),
++            "gl_carry_share": post_n("gl_carry_share", 8),
++            "ez_target_share": post_n("ez_target_share", 5),
++        },
++        weekly_phi=dict(phi),
++    )
+diff --git a/backend/core/profiles.py b/backend/core/profiles.py
+new file mode 100644
+index 0000000..76e9f55
+--- /dev/null
++++ b/backend/core/profiles.py
+@@ -0,0 +1,416 @@
++"""Player profile system (build item 12, requirements section 14).
++
++Profiles feed two models:
++
++* Variance (`variance.py`) -- per-player dispersion parameters
++* Correlation/allocation (`allocation.py`, sim item 14) -- usage shares and
++  their variability
++
++Design rules honoured here:
++
++* **Continuous features, discrete labels (14b).** Models consume continuous
++  features; archetype labels are computed separately and are display-only.
++* **Exponentially weighted (14g).** Features are EW ratios with a ~4-game
++  half-life, computed as ratio-of-EW-sums (stabler than mean-of-ratios).
++* **Shrinkage by opportunity count (14e).** Empirical Bayes toward a
++  position prior, weighted by the feature's own denominator count (carries,
++  targets, dropbacks) -- never games played.
++* **Cold start (14f).** Projection-derived proxies, draft capital, depth
++  chart. Blended through the same shrinkage machinery via pseudo-counts.
++
++Pure core module: dataclasses in, dataclasses out. No I/O, no database, no
++HTTP. The offline scripts (`scripts/build_usage.py`, `scripts/fit_*.py`)
++compute the raw usage rows from nflverse parquet and fit the coefficients;
++this module only defines the math.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++
++# --------------------------------------------------------------------------
++# Raw observations
++# --------------------------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class UsageGame:
++    """One player-game of raw usage counts, all tier-1 (live) sources.
++
++    Every field is a count or a sum -- features are ratios of EW sums of
++    these. `team_*` fields are that player's team totals in the same game so
++    share features need no second lookup.
++    """
++    season: int
++    week: int
++    team: str = ""
++    opponent: str = ""
++
++    # participation
++    snaps: float = 0.0
++    team_snaps: float = 0.0
++
++    # passing (QB)
++    dropbacks: float = 0.0          # player's own dropbacks
++    pass_att: float = 0.0
++    completions: float = 0.0
++    pass_yds: float = 0.0
++    pass_tds: float = 0.0
++    ints: float = 0.0
++    sacks: float = 0.0
++    scrambles: float = 0.0
++    designed_rush: float = 0.0      # QB designed carries (non-scramble)
++    pass_air_yards: float = 0.0     # sum of air yards thrown
++    deep_att: float = 0.0           # throws with air_yards >= 20
++
++    # rushing
++    carries: float = 0.0
++    rush_yds: float = 0.0
++    rush_tds: float = 0.0
++    gl_carries: float = 0.0         # carries from inside the 5
++    team_rb_carries: float = 0.0    # team carries by RBs
++    team_gl_carries: float = 0.0    # team carries inside the 5 (all positions)
++
++    # receiving
++    targets: float = 0.0
++    receptions: float = 0.0
++    rec_yds: float = 0.0
++    rec_tds: float = 0.0
++    rec_air_yards: float = 0.0      # sum of air yards on this player's targets
++    deep_targets: float = 0.0       # targets with air_yards >= 20
++    ez_targets: float = 0.0         # targets thrown into the end zone
++    yac: float = 0.0
++
++    # team context
++    team_dropbacks: float = 0.0
++    team_targets: float = 0.0
++    team_air_yards: float = 0.0
++    team_ez_targets: float = 0.0
++
++
++# --------------------------------------------------------------------------
++# Feature registry
++# --------------------------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class FeatureSpec:
++    """A profile feature: EW(num) / EW(den), shrunk toward a prior with
++    pseudo-count `k` expressed in denominator units."""
++    name: str
++    num: str                        # UsageGame field for the numerator
++    den: str                        # UsageGame field for the denominator
++    k: float                        # shrinkage pseudo-count (denominator units)
++    positions: tuple[str, ...]
++
++
++FEATURES: tuple[FeatureSpec, ...] = (
++    # --- QB ---
++    FeatureSpec("rush_att_per_dropback", "qb_rushes", "dropbacks", 60, ("QB",)),
++    FeatureSpec("designed_rush_rate", "designed_rush", "dropbacks", 60, ("QB",)),
++    FeatureSpec("scramble_rate", "scrambles", "dropbacks", 60, ("QB",)),
++    FeatureSpec("adot", "pass_air_yards", "pass_att", 50, ("QB",)),
++    FeatureSpec("deep_rate", "deep_att", "pass_att", 50, ("QB",)),
++    FeatureSpec("sack_rate", "sacks", "dropbacks", 60, ("QB",)),
++    FeatureSpec("int_rate", "ints", "pass_att", 120, ("QB",)),
++    FeatureSpec("ypa", "pass_yds", "pass_att", 50, ("QB",)),
++    # --- RB ---
++    FeatureSpec("carry_share", "carries", "team_rb_carries", 30, ("RB",)),
++    FeatureSpec("gl_carry_share", "gl_carries", "team_gl_carries", 8, ("RB",)),
++    FeatureSpec("targets_per_dropback", "targets", "team_dropbacks", 60, ("RB", "TE", "WR")),
++    FeatureSpec("ypc", "rush_yds", "carries", 40, ("RB", "QB")),
++    # --- WR / TE / RB receiving ---
++    FeatureSpec("target_share", "targets", "team_targets", 40, ("RB", "WR", "TE")),
++    FeatureSpec("air_yards_share", "rec_air_yards", "team_air_yards", 300, ("WR", "TE")),
++    FeatureSpec("rec_adot", "rec_air_yards", "targets", 12, ("RB", "WR", "TE")),
++    FeatureSpec("deep_target_rate", "deep_targets", "targets", 15, ("WR", "TE")),
++    FeatureSpec("ez_target_share", "ez_targets", "team_ez_targets", 5, ("WR", "TE", "RB")),
++    FeatureSpec("ypr", "rec_yds", "receptions", 15, ("RB", "WR", "TE")),
++    FeatureSpec("yac_per_rec", "yac", "receptions", 15, ("RB", "WR", "TE")),
++    # --- participation ---
++    FeatureSpec("snap_share", "snaps", "team_snaps", 120, ("QB", "RB", "WR", "TE")),
++)
++
++# Derived features computed from base features rather than num/den pairs.
++# WOPR = 1.5 * target_share + 0.7 * air_yards_share (14d).
++DERIVED = ("wopr",)
++
++
++def _usage_value(g: UsageGame, name: str) -> float:
++    if name == "qb_rushes":                      # designed + scrambles
++        return g.designed_rush + g.scrambles
++    return float(getattr(g, name))
++
++
++# --------------------------------------------------------------------------
++# Exponential weighting
++# --------------------------------------------------------------------------
++
++DEFAULT_HALF_LIFE = 4.0
++
++
++def ew_weight(games_ago: int, half_life: float = DEFAULT_HALF_LIFE) -> float:
++    """Weight for an observation `games_ago` games before the as-of point.
++    Most recent game has weight 1."""
++    return 0.5 ** (games_ago / half_life)
++
++
++def ew_sums(
++    games: list[UsageGame], name: str, half_life: float = DEFAULT_HALF_LIFE
++) -> float:
++    """EW sum of one usage field over games ordered oldest -> newest."""
++    n = len(games)
++    return sum(
++        ew_weight(n - 1 - i, half_life) * _usage_value(g, name)
++        for i, g in enumerate(games)
++    )
++
++
++# --------------------------------------------------------------------------
++# Position priors (defaults; the fitted coefficients file overrides these)
++# --------------------------------------------------------------------------
++
++POSITION_PRIORS: dict[str, dict[str, float]] = {
++    "QB": {
++        "rush_att_per_dropback": 0.10, "designed_rush_rate": 0.04,
++        "scramble_rate": 0.06, "adot": 7.8, "deep_rate": 0.11,
++        "sack_rate": 0.065, "int_rate": 0.023, "ypa": 7.0,
++        "ypc": 5.5, "snap_share": 1.0,
++    },
++    "RB": {
++        "carry_share": 0.35, "gl_carry_share": 0.20,
++        "targets_per_dropback": 0.07, "ypc": 4.3, "target_share": 0.08,
++        "rec_adot": -0.5, "ez_target_share": 0.04, "ypr": 7.5,
++        "yac_per_rec": 8.0, "snap_share": 0.45,
++    },
++    "WR": {
++        "targets_per_dropback": 0.12, "target_share": 0.14,
++        "air_yards_share": 0.16, "rec_adot": 10.5, "deep_target_rate": 0.18,
++        "ez_target_share": 0.09, "ypr": 12.0, "yac_per_rec": 4.8,
++        "snap_share": 0.65,
++    },
++    "TE": {
++        "targets_per_dropback": 0.09, "target_share": 0.11,
++        "air_yards_share": 0.10, "rec_adot": 7.0, "deep_target_rate": 0.08,
++        "ez_target_share": 0.08, "ypr": 10.0, "yac_per_rec": 5.0,
++        "snap_share": 0.60,
++    },
++}
++
++
++# --------------------------------------------------------------------------
++# Profile
++# --------------------------------------------------------------------------
++
++
++@dataclass
++class PlayerProfile:
++    """Continuous features + the opportunity counts behind them.
++
++    `features` are shrunk values ready for model consumption.
++    `raw` and `opportunities` are kept for the correlation inspector and for
++    debugging shrinkage behaviour. `label` is display-only (14b).
++    """
++    gsis_id: str
++    name: str
++    position: str
++    team: str
++    season: int
++    week: int                        # as-of week (features use games strictly before it)
++    features: dict[str, float] = field(default_factory=dict)
++    raw: dict[str, float | None] = field(default_factory=dict)
++    opportunities: dict[str, float] = field(default_factory=dict)
++    games_observed: int = 0
++    label: str = ""
++
++
++def shrink(raw: float | None, eff_n: float, prior: float, k: float) -> float:
++    """Empirical-Bayes shrinkage: (n*raw + k*prior) / (n + k).
++
++    `eff_n` is the EW opportunity count in denominator units. With no
++    observations the prior comes back exactly; with heavy usage the raw value
++    dominates. Never weighted by games played (14e).
++    """
++    if raw is None or eff_n <= 0:
++        return prior
++    return (eff_n * raw + k * prior) / (eff_n + k)
++
++
++def compute_profile(
++    gsis_id: str,
++    name: str,
++    position: str,
++    team: str,
++    season: int,
++    week: int,
++    games: list[UsageGame],
++    priors: dict[str, dict[str, float]] | None = None,
++    half_life: float = DEFAULT_HALF_LIFE,
++    cold_prior: dict[str, float] | None = None,
++    cold_weight: float = 0.0,
++) -> PlayerProfile:
++    """Build a profile from usage history (games ordered oldest -> newest,
++    all strictly before the as-of week).
++
++    `cold_prior` + `cold_weight`: cold-start features (14f) blended in as
++    `cold_weight` pseudo-observations of each feature's denominator. As real
++    opportunities accumulate the cold prior washes out automatically.
++    """
++    priors = priors or POSITION_PRIORS
++    pos_prior = priors.get(position, {})
++    prof = PlayerProfile(gsis_id=gsis_id, name=name, position=position,
++                         team=team, season=season, week=week,
++                         games_observed=len(games))
++
++    for spec in FEATURES:
++        if position not in spec.positions:
++            continue
++        num = ew_sums(games, spec.num, half_life)
++        den = ew_sums(games, spec.den, half_life)
++        raw = (num / den) if den > 0 else None
++        prior = pos_prior.get(spec.name, 0.0)
++        # cold-start blending: treat the cold value as `cold_weight` extra
++        # denominator units of evidence at the cold value.
++        if cold_prior is not None and spec.name in cold_prior and cold_weight > 0:
++            prior = cold_prior[spec.name]
++            k = cold_weight
++        else:
++            k = spec.k
++        prof.raw[spec.name] = raw
++        prof.opportunities[spec.name] = den
++        prof.features[spec.name] = shrink(raw, den, prior, k)
++
++    # derived
++    if position in ("WR", "TE", "RB"):
++        ts = prof.features.get("target_share", 0.0)
++        ays = prof.features.get("air_yards_share", 0.0)
++        prof.features["wopr"] = 1.5 * ts + 0.7 * ays
++
++    prof.label = archetype_label(position, prof.features)
++    return prof
++
++
++# --------------------------------------------------------------------------
++# Cold start (14f)
++# --------------------------------------------------------------------------
++
++# League-average per-game team volumes used to turn a projected stat line
++# into share proxies. Coarse by design -- these only matter until real
++# opportunities accumulate.
++LEAGUE_AVG = {
++    "team_dropbacks": 36.0,
++    "team_targets": 34.0,
++    "team_rb_carries": 24.0,
++    "team_air_yards": 270.0,
++    "team_gl_carries": 1.8,
++    "team_ez_targets": 2.4,
++    "catch_rate": 0.66,
++}
++
++# Draft-capital multiplier on projected usage shares for players with no
++# usage history: high picks are given their projection at face value or
++# better; late picks and UDFAs are haircut. Strongest cold-start signal (14f).
++def draft_capital_factor(overall_pick: int | None) -> float:
++    if overall_pick is None:
++        return 0.85
++    if overall_pick <= 15:
++        return 1.10
++    if overall_pick <= 32:
++        return 1.05
++    if overall_pick <= 64:
++        return 1.00
++    if overall_pick <= 105:
++        return 0.95
++    return 0.88
++
++
++def cold_start_features(
++    position: str,
++    proj: dict[str, float],
++    overall_pick: int | None = None,
++    depth_rank: int | None = None,
++) -> dict[str, float]:
++    """Projection-derived feature proxies for a player with no usage history.
++
++    `proj` is a per-game projected stat line (FantasyPros field names:
++    pass_att, pass_yds, rush_att, rush_yds, rec_rec/rec, rec_yds, ...).
++    Draft capital scales usage shares; depth rank beyond 2 haircuts further.
++    """
++    g = lambda k, alt=None: float(proj.get(k, proj.get(alt, 0.0) if alt else 0.0) or 0.0)
++    f = draft_capital_factor(overall_pick)
++    if depth_rank is not None and depth_rank >= 3:
++        f *= 0.8
++
++    rec = g("rec_rec", "rec")
++    targets = rec / LEAGUE_AVG["catch_rate"] if rec > 0 else 0.0
++    rec_yds = g("rec_yds")
++    ypr = rec_yds / rec if rec > 0 else 0.0
++    # aDOT proxy: yards per reception minus a typical YAC allowance
++    adot_proxy = max(ypr - 5.0, 0.5) if rec > 0 else 0.0
++
++    out: dict[str, float] = {}
++    if position == "QB":
++        pa = max(g("pass_att"), 1e-9)
++        dropbacks = pa * 1.07                      # attempts + sacks/scrambles
++        out["rush_att_per_dropback"] = g("rush_att") / dropbacks
++        out["scramble_rate"] = 0.6 * out["rush_att_per_dropback"]
++        out["designed_rush_rate"] = 0.4 * out["rush_att_per_dropback"]
++        out["ypa"] = g("pass_yds") / pa
++        out["ypc"] = (g("rush_yds") / g("rush_att")) if g("rush_att") > 0 else 5.5
++    else:
++        out["carry_share"] = min(f * g("rush_att") / LEAGUE_AVG["team_rb_carries"], 0.85)
++        out["gl_carry_share"] = out["carry_share"]  # no better signal pre-debut
++        out["target_share"] = min(f * targets / LEAGUE_AVG["team_targets"], 0.32)
++        out["targets_per_dropback"] = min(f * targets / LEAGUE_AVG["team_dropbacks"], 0.28)
++        if rec > 0:
++            out["rec_adot"] = adot_proxy
++            out["air_yards_share"] = min(
++                f * targets * adot_proxy / LEAGUE_AVG["team_air_yards"], 0.40)
++            out["ypr"] = ypr
++    return out
++
++
++# --------------------------------------------------------------------------
++# Archetype labels -- display only (14b). Never used by models.
++# --------------------------------------------------------------------------
++
++
++def archetype_label(position: str, feats: dict[str, float]) -> str:
++    g = lambda k: feats.get(k, 0.0)
++    if position == "QB":
++        r = g("rush_att_per_dropback")
++        if r >= 0.16:
++            return "Dual-Threat"
++        if r >= 0.09:
++            return "Mobile"
++        return "Pocket Passer"
++    if position == "RB":
++        bell = g("carry_share") >= 0.55
++        recv = g("targets_per_dropback") >= 0.11
++        if bell and recv:
++            return "Three-Down Back"
++        if bell:
++            return "Early-Down Hammer"
++        if recv:
++            return "Receiving Back"
++        if g("gl_carry_share") >= 0.45:
++            return "Goal-Line Back"
++        return "Committee Back"
++    if position == "WR":
++        if g("target_share") >= 0.24 and g("air_yards_share") >= 0.30:
++            return "Alpha"
++        if g("rec_adot") >= 14.0:
++            return "Deep Threat"
++        if g("rec_adot") <= 8.0 and g("target_share") >= 0.16:
++            return "Underneath / Slot"
++        if g("ez_target_share") >= 0.20:
++            return "Red-Zone Specialist"
++        if g("target_share") >= 0.16:
++            return "Primary"
++        return "Rotational"
++    if position == "TE":
++        if g("targets_per_dropback") >= 0.14:
++            return "Move TE"
++        if g("target_share") >= 0.12:
++            return "Primary TE"
++        return "Inline TE"
++    return ""
+diff --git a/backend/core/variance.py b/backend/core/variance.py
+index 6541584..7f72bd7 100644
+--- a/backend/core/variance.py
++++ b/backend/core/variance.py
+@@ -51,7 +51,11 @@ class Dispersion:
+     ypr_cv: float = 0.65       # yards per reception
+     ypa_cv: float = 0.30       # yards per pass attempt
+     cmp_k: float = 25.0        # pass attempts
+-    td_inflation: float = 1.0  # >1 widens TD counts beyond Poisson
++    td_k: float = 8.0          # TD-count NB dispersion: lower = fatter tails
++    # NOTE: replaces the old `td_inflation` scaled-Poisson scheme, which had
++    # inverted semantics (poisson(m*t)/t has variance m/t, so t>1 *narrowed*
++    # the distribution) and produced fractional TD counts. Negative binomial
++    # gives integer draws with variance m + m^2/k; k -> inf recovers Poisson.
+ 
+ 
+ @dataclass
+@@ -185,7 +189,7 @@ def simulate(
+         att = _nbinom(rng, line.pass_att or line.pass_yds / 7.0, disp.cmp_k, n)
+         ypa = line.pass_yds / max(line.pass_att or line.pass_yds / 7.0, 1e-9)
+         pyds = _gamma_yards(rng, att, ypa, disp.ypa_cv)
+-        ptds = rng.poisson(line.pass_tds * disp.td_inflation, n) / disp.td_inflation
++        ptds = _nbinom(rng, line.pass_tds, disp.td_k, n)
+         ints = rng.poisson(line.pass_ints, n)
+         pts += pyds * PASS_YD + ptds * PASS_TD + ints * INT
+         pts += (pyds >= PASS_BONUS_AT) * BONUS
+@@ -195,7 +199,7 @@ def simulate(
+         att = _nbinom(rng, line.rush_att, disp.att_k, n)
+         ypc = line.rush_yds / max(line.rush_att, 1e-9)
+         ryds = _gamma_yards(rng, att, ypc, disp.ypc_cv)
+-        rtds = rng.poisson(line.rush_tds * disp.td_inflation, n) / disp.td_inflation
++        rtds = _nbinom(rng, line.rush_tds, disp.td_k, n)
+         pts += ryds * RUSH_YD + rtds * RUSH_TD
+         pts += (ryds >= RUSH_BONUS_AT) * BONUS
+ 
+@@ -204,7 +208,7 @@ def simulate(
+         rec = _nbinom(rng, line.rec, disp.tgt_k, n)
+         ypr = line.rec_yds / max(line.rec, 1e-9)
+         cyds = _gamma_yards(rng, rec, ypr, disp.ypr_cv)
+-        ctds = rng.poisson(line.rec_tds * disp.td_inflation, n) / disp.td_inflation
++        ctds = _nbinom(rng, line.rec_tds, disp.td_k, n)
+         pts += rec * REC + cyds * REC_YD + ctds * REC_TD
+         pts += (cyds >= REC_BONUS_AT) * BONUS
+ 
+diff --git a/backend/jobs/simulate.py b/backend/jobs/simulate.py
+index 58e599e..686962a 100644
+--- a/backend/jobs/simulate.py
++++ b/backend/jobs/simulate.py
+@@ -3,20 +3,68 @@
+ Independent player draws (build item 6). Per-game RNG partitioning is already
+ in core/sims.py so the hierarchical sim (item 14) slots in without schema or
+ cache changes.
++
++Dispersion is profile-driven (build items 12/13): fitted per-position
++parameters from `core/data/allocation_coeffs.json`, adjusted per player by
++their profile snapshot. Players with no snapshot (rookies, debuts) get a
++cold-start profile derived from their projection + draft capital (14f).
+ """
+ from __future__ import annotations
+ 
+ import numpy as np
+ 
++from ..core.allocation import AllocationCoeffs, dispersion_for
++from ..core.profiles import PlayerProfile, cold_start_features
+ from ..core.sims import SimPlayer, build_sims
+-from ..core.variance import Dispersion, StatLine
++from ..core.variance import StatLine
+ from ..models.db import SessionLocal
+-from ..models.models import Adjustment, PoolPlayer, PoolVersion
++from ..models.models import (Adjustment, PlayerCanonical, PoolPlayer,
++                             PoolVersion, ProfileSnapshot)
+ from ..settings import get_settings
+ from . import simscache
+ from .runner import JobContext, register
+ 
+ 
++def load_profiles(db, pool: list[PoolPlayer]) -> tuple[dict[int, PlayerProfile], int]:
++    """player_id -> profile for the pool. Latest snapshot per gsis_id, cold
++    start for the rest. Returns (map, n_from_snapshot)."""
++    ids = [pp.player_id for pp in pool]
++    canon = {c.id: c for c in (db.query(PlayerCanonical)
++                               .filter(PlayerCanonical.id.in_(ids)).all())}
++    gsis_ids = [c.gsis_id for c in canon.values() if c.gsis_id]
++    snaps: dict[str, ProfileSnapshot] = {}
++    if gsis_ids:
++        for s in (db.query(ProfileSnapshot)
++                  .filter(ProfileSnapshot.gsis_id.in_(gsis_ids))
++                  .order_by(ProfileSnapshot.season, ProfileSnapshot.week).all()):
++            snaps[s.gsis_id] = s          # later (newer) rows overwrite
++
++    out: dict[int, PlayerProfile] = {}
++    hits = 0
++    for pp in pool:
++        if pp.position == "DST":
++            continue
++        c = canon.get(pp.player_id)
++        s = snaps.get(c.gsis_id) if (c and c.gsis_id) else None
++        if s is not None:
++            out[pp.player_id] = PlayerProfile(
++                gsis_id=s.gsis_id, name=pp.name, position=pp.position,
++                team=pp.team, season=s.season, week=s.week,
++                features=dict(s.features or {}),
++                opportunities=dict(s.opportunities or {}),
++                games_observed=s.games, label=s.label)
++            hits += 1
++        else:
++            feats = cold_start_features(
++                pp.position, pp.stats or {},
++                overall_pick=c.draft_pick if c else None)
++            out[pp.player_id] = PlayerProfile(
++                gsis_id=c.gsis_id if c else "", name=pp.name,
++                position=pp.position, team=pp.team, season=0, week=0,
++                features=feats, label="cold-start")
++    return out, hits
++
++
+ def statline_from_stats(name: str, position: str, stats: dict) -> StatLine:
+     return StatLine(
+         name=name, position=position,
+@@ -58,6 +106,9 @@ def simulate_job(job_id: int) -> None:
+             if a.value:
+                 variance_overrides[a.player_id] = float(a.value)
+ 
++        coeffs = AllocationCoeffs.load()
++        prof_map, prof_hits = load_profiles(db, pool)
++
+         sim_players = []
+         for pp in pool:
+             sim_players.append(SimPlayer(
+@@ -67,7 +118,8 @@ def simulate_job(job_id: int) -> None:
+                 line=statline_from_stats(pp.name, pp.position, pp.stats or {}),
+                 dst_stats=pp.stats if pp.position == "DST" else None,
+                 implied_opponent_total=pp.implied_opp_total or 21.0,
+-                dispersion=Dispersion(),
++                dispersion=dispersion_for(pp.position, coeffs,
++                                          prof_map.get(pp.player_id)),
+                 variance_scale=variance_overrides.get(pp.player_id, 1.0),
+             ))
+ 
+@@ -90,6 +142,9 @@ def simulate_job(job_id: int) -> None:
+         pv.sims_seed = seed
+         db.commit()
+         ctx.finish({"pool_version_id": pv_id, "n_sims": n_sims,
+-                    "n_players": len(order), "blob_key": key})
++                    "n_players": len(order), "blob_key": key,
++                    "profiles_used": prof_hits,
++                    "cold_start": len(prof_map) - prof_hits,
++                    "coeffs_fitted": bool(coeffs.meta.get("fitted"))})
+     finally:
+         db.close()
+diff --git a/backend/main.py b/backend/main.py
+index 9d5d6f9..6f75e96 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
+ from starlette.middleware.sessions import SessionMiddleware
+ 
+ from .api import (auth_routes, builder, builds, contests, jobs_routes, pool,
+-                  review, slates)
++                  profiles, review, slates)
+ # job registration side effects
+ from .jobs import ingest, optimize, simulate  # noqa: F401
+ from .models.db import Base, engine
+@@ -26,7 +26,7 @@ app.add_middleware(CORSMiddleware,
+                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+ 
+ for r in (auth_routes, slates, pool, builder, builds, contests,
+-          jobs_routes, review):
++          jobs_routes, review, profiles):
+     app.include_router(r.router)
+ 
+ 
+diff --git a/backend/models/models.py b/backend/models/models.py
+index 738042f..35b2197 100644
+--- a/backend/models/models.py
++++ b/backend/models/models.py
+@@ -69,6 +69,7 @@ class PlayerCanonical(Base):
+     mflid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+     player_dk_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+     gsis_id: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
++    draft_pick: Mapped[int | None] = mapped_column(Integer, nullable=True)  # overall; cold-start prior (14f)
+ 
+ 
+ class SourceMap(Base):
+@@ -234,6 +235,29 @@ class OwnershipObservation(Base):
+     fpts: Mapped[float | None] = mapped_column(Float, nullable=True)
+ 
+ 
++class ProfileSnapshot(Base):
++    """Per-player profile as of (season, week) -- build item 12.
++
++    Imported from the offline artifact (`scripts/build_profiles.py`).
++    Snapshots are kept per as-of week (14g) so past builds reproduce and the
++    correlation inspector can show what the sim actually used.
++    """
++    __tablename__ = "profile_snapshots"
++    id: Mapped[int] = mapped_column(primary_key=True)
++    gsis_id: Mapped[str] = mapped_column(String(16), index=True)
++    season: Mapped[int] = mapped_column(Integer)
++    week: Mapped[int] = mapped_column(Integer)
++    name: Mapped[str] = mapped_column(String(128), default="")
++    position: Mapped[str] = mapped_column(String(8), default="")
++    team: Mapped[str] = mapped_column(String(8), default="")
++    features: Mapped[dict] = mapped_column(JSON, default=dict)
++    opportunities: Mapped[dict] = mapped_column(JSON, default=dict)
++    games: Mapped[int] = mapped_column(Integer, default=0)
++    label: Mapped[str] = mapped_column(String(32), default="")
++    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
++    __table_args__ = (UniqueConstraint("gsis_id", "season", "week"),)
++
++
+ class OddsSnapshot(Base):
+     """Persist every snapshot -- line movement Wed->Sun is free signal."""
+     __tablename__ = "odds_snapshots"
+diff --git a/backend/tests/test_profiles.py b/backend/tests/test_profiles.py
+new file mode 100644
+index 0000000..614b593
+--- /dev/null
++++ b/backend/tests/test_profiles.py
+@@ -0,0 +1,174 @@
++"""Profile system tests (build items 12/13): EW math, shrinkage limits,
++cold start, labels, and the profile -> dispersion mapping."""
++import numpy as np
++
++from backend.core.allocation import (AllocationCoeffs, dispersion_for,
++                                     shares_for)
++from backend.core.profiles import (DEFAULT_HALF_LIFE, POSITION_PRIORS,
++                                   PlayerProfile, UsageGame, archetype_label,
++                                   cold_start_features, compute_profile,
++                                   ew_weight, shrink)
++from backend.core.variance import Dispersion, StatLine, simulate
++
++
++def rb_game(week, carries=18, team_rb=25, targets=3, team_tgt=33, **kw):
++    return UsageGame(season=2025, week=week, team="PHI",
++                     carries=carries, team_rb_carries=team_rb,
++                     targets=targets, team_targets=team_tgt,
++                     receptions=targets * 0.8, rec_yds=targets * 6,
++                     rush_yds=carries * 4.5, team_dropbacks=34,
++                     snaps=45, team_snaps=65, **kw)
++
++
++# --- EW machinery ---------------------------------------------------------
++
++def test_ew_weight_half_life():
++    assert ew_weight(0) == 1.0
++    assert abs(ew_weight(DEFAULT_HALF_LIFE) - 0.5) < 1e-12
++    assert abs(ew_weight(2 * DEFAULT_HALF_LIFE) - 0.25) < 1e-12
++
++
++def test_recent_games_dominate():
++    # 8 games at 10 carries then 4 at 25: EW value should sit well above the
++    # unweighted mean (14.9) because recency dominates.
++    games = [rb_game(w, carries=10) for w in range(1, 9)]
++    games += [rb_game(w, carries=25) for w in range(9, 13)]
++    p = compute_profile("x", "X", "RB", "PHI", 2025, 13, games)
++    raw_share = p.raw["carry_share"]
++    assert raw_share > (10 * 8 + 25 * 4) / (25.0 * 12) + 0.08
++
++
++# --- shrinkage (14e) ------------------------------------------------------
++
++def test_no_data_returns_prior():
++    assert shrink(None, 0.0, 0.35, 30) == 0.35
++    p = compute_profile("x", "X", "RB", "PHI", 2025, 1, [])
++    assert p.features["carry_share"] == POSITION_PRIORS["RB"]["carry_share"]
++    assert p.games_observed == 0
++
++
++def test_heavy_usage_dominates_prior():
++    games = [rb_game(w, carries=22, team_rb=26) for w in range(1, 18)]
++    p = compute_profile("x", "X", "RB", "PHI", 2025, 18, games)
++    raw = 22 / 26
++    assert abs(p.features["carry_share"] - raw) < 0.10  # near raw, not prior
++
++
++def test_shrinkage_weighted_by_opportunity_not_games():
++    # one game with 25 carries carries more evidence than three with 3
++    one_big = compute_profile("a", "A", "RB", "PHI", 2025, 5,
++                              [rb_game(4, carries=25, team_rb=28)])
++    three_small = compute_profile("b", "B", "RB", "PHI", 2025, 5,
++                                  [rb_game(w, carries=3, team_rb=28)
++                                   for w in (2, 3, 4)])
++    prior = POSITION_PRIORS["RB"]["carry_share"]
++    # distance moved off the prior should be larger for the 25-carry game
++    assert abs(one_big.features["carry_share"] - prior) > \
++        abs(three_small.features["carry_share"] - prior)
++
++
++# --- cold start (14f) -----------------------------------------------------
++
++def test_cold_start_rookie_wr():
++    proj = {"rec": 4.5, "rec_yds": 62.0}
++    feats = cold_start_features("WR", proj, overall_pick=8)
++    assert 0.1 < feats["target_share"] < 0.32
++    assert feats["rec_adot"] > 3.0
++    # late-round pick gets a haircut on the same projection
++    late = cold_start_features("WR", proj, overall_pick=200)
++    assert late["target_share"] < feats["target_share"]
++
++
++def test_cold_start_blends_into_profile():
++    cold = cold_start_features("RB", {"rush_att": 14.0, "rush_yds": 60.0},
++                               overall_pick=10)
++    p = compute_profile("x", "X", "RB", "PHI", 2025, 1, [],
++                        cold_prior=cold, cold_weight=20)
++    assert abs(p.features["carry_share"] - cold["carry_share"]) < 1e-9
++    # after real games the cold prior washes toward observed usage
++    games = [rb_game(w, carries=4, team_rb=26) for w in range(1, 7)]
++    p2 = compute_profile("x", "X", "RB", "PHI", 2025, 7, games,
++                         cold_prior=cold, cold_weight=20)
++    assert p2.features["carry_share"] < p.features["carry_share"]
++
++
++# --- labels (14b): display only ------------------------------------------
++
++def test_labels():
++    assert archetype_label("QB", {"rush_att_per_dropback": 0.18}) == "Dual-Threat"
++    assert archetype_label("RB", {"carry_share": 0.7,
++                                  "targets_per_dropback": 0.13}) == "Three-Down Back"
++    assert archetype_label("WR", {"target_share": 0.28, "air_yards_share": 0.36,
++                                  "rec_adot": 12}) == "Alpha"
++    lab = archetype_label("TE", {"targets_per_dropback": 0.05, "target_share": 0.04})
++    assert lab == "Inline TE"
++
++
++# --- allocation mapping ---------------------------------------------------
++
++def test_coeffs_load_fitted():
++    c = AllocationCoeffs.load()
++    assert c.meta.get("fitted") is True         # shipped data file present
++    for pos in ("QB", "RB", "WR", "TE"):
++        assert pos in c.dispersion
++
++
++def test_bellcow_steadier_than_committee():
++    c = AllocationCoeffs.load()
++    bell = PlayerProfile("a", "A", "RB", "PHI", 2025, 10,
++                         features={"carry_share": 0.75, "targets_per_dropback": 0.10,
++                                   "rec_adot": 0.0})
++    comm = PlayerProfile("b", "B", "RB", "PHI", 2025, 10,
++                         features={"carry_share": 0.20, "targets_per_dropback": 0.04,
++                                   "rec_adot": 0.0})
++    db, dc = dispersion_for("RB", c, bell), dispersion_for("RB", c, comm)
++    assert db.att_k > dc.att_k                   # steadier carry counts
++    assert db.tgt_k > dc.tgt_k
++
++
++def test_deep_threat_wider_ypr():
++    c = AllocationCoeffs.load()
++    deep = PlayerProfile("a", "A", "WR", "PHI", 2025, 10,
++                         features={"rec_adot": 16.0, "targets_per_dropback": 0.1})
++    slot = PlayerProfile("b", "B", "WR", "PHI", 2025, 10,
++                         features={"rec_adot": 5.0, "targets_per_dropback": 0.1})
++    assert dispersion_for("WR", c, deep).ypr_cv > dispersion_for("WR", c, slot).ypr_cv
++
++
++def test_shares_posterior_n_grows_with_opportunity():
++    c = AllocationCoeffs.load()
++    thin = PlayerProfile("a", "A", "RB", "PHI", 2025, 3,
++                         features={"carry_share": 0.5},
++                         opportunities={"carry_share": 20.0})
++    heavy = PlayerProfile("b", "B", "RB", "PHI", 2025, 15,
++                          features={"carry_share": 0.5},
++                          opportunities={"carry_share": 90.0})
++    assert shares_for(heavy, c).posterior_n["carry_share"] > \
++        shares_for(thin, c).posterior_n["carry_share"]
++
++
++# --- variance td_k semantics (replaces inverted td_inflation) -------------
++
++def test_td_k_widens_as_it_falls():
++    line = StatLine(name="t", position="WR", rec=6, rec_yds=80, rec_tds=0.6)
++    wide = simulate(line, n=30000, disp=Dispersion(td_k=1.5), seed=7)
++    narrow = simulate(line, n=30000, disp=Dispersion(td_k=300.0), seed=7)
++    assert wide.sd > narrow.sd
++    assert abs(wide.mean - narrow.mean) < 1.0    # mean preserved
++
++
++def test_profile_driven_dispersion_changes_shape_not_mean():
++    c = AllocationCoeffs.load()
++    line = StatLine(name="rb", position="RB", rush_att=16, rush_yds=70,
++                    rush_tds=0.5, rec=3, rec_yds=20, rec_tds=0.1)
++    bell = PlayerProfile("a", "A", "RB", "PHI", 2025, 10,
++                         features={"carry_share": 0.75, "targets_per_dropback": 0.10,
++                                   "rec_adot": 0.0})
++    comm = PlayerProfile("b", "B", "RB", "PHI", 2025, 10,
++                         features={"carry_share": 0.18, "targets_per_dropback": 0.03,
++                                   "rec_adot": 0.0})
++    d1 = simulate(line, n=40000, disp=dispersion_for("RB", c, bell), seed=3)
++    d2 = simulate(line, n=40000, disp=dispersion_for("RB", c, comm), seed=3)
++    assert abs(d1.mean - d2.mean) < 0.8          # same projection
++    assert d2.sd > d1.sd                          # committee back is swingier
++    assert d2.ceiling >= d1.ceiling - 0.3
+-- 
+2.43.0
+
+
+From 868bb200d5120fd66de74c497c42ba3ab1406cac Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 17 Aug 2026 02:28:44 +0000
+Subject: [PATCH 2/2] Allocation + dispersion fit from pbp actuals, 2019-2025
+ (item 13)
+
+- scripts/build_usage.py: nflverse parquet -> player-week + team-week usage
+  (36,326 player-weeks, verified against known 2024 stat lines)
+- scripts/fit_allocation.py: EW-conditional MLE, no projection join (1h):
+  NB k for counts, gamma CV for efficiency, Beta phi for weekly share
+  variation, opportunity-weighted position priors
+- core/data/allocation_coeffs.json: fitted coefficients shipped as data;
+  the app never queries pbp
+- verification: simulated vs empirical points spread now within ~10% at
+  every position (old defaults: QB std 6.8 vs 8.5 empirical, RB 6.9 vs 8.3)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBMcj942YrXqW5nEGK36s6
+---
+ backend/core/data/allocation_coeffs.json | 106 ++++++++
+ pyproject.toml                           |   3 +
+ scripts/build_profiles.py                |  98 +++++++
+ scripts/build_usage.py                   | 211 +++++++++++++++
+ scripts/fit_allocation.py                | 327 +++++++++++++++++++++++
+ 5 files changed, 745 insertions(+)
+ create mode 100644 backend/core/data/allocation_coeffs.json
+ create mode 100644 scripts/build_profiles.py
+ create mode 100644 scripts/build_usage.py
+ create mode 100644 scripts/fit_allocation.py
+
+diff --git a/backend/core/data/allocation_coeffs.json b/backend/core/data/allocation_coeffs.json
+new file mode 100644
+index 0000000..f6596f3
+--- /dev/null
++++ b/backend/core/data/allocation_coeffs.json
+@@ -0,0 +1,106 @@
++{
++  "meta": {
++    "fitted": true,
++    "fitted_at": "2026-08-17",
++    "seasons": [
++      2019,
++      2020,
++      2021,
++      2022,
++      2023,
++      2024,
++      2025
++    ],
++    "half_life_games": 4.0,
++    "method": "EW-conditional MLE (NB counts, gamma efficiency, Beta shares)"
++  },
++  "dispersion": {
++    "QB": {
++      "att_k": 8.48,
++      "cmp_k": 18.15,
++      "ypc_cv": 1.608,
++      "ypa_cv": 1.56,
++      "td_k": 400.0
++    },
++    "RB": {
++      "att_k": 4.06,
++      "tgt_k": 5.65,
++      "ypc_cv": 1.481,
++      "ypr_cv": 1.115,
++      "td_k": 6.34
++    },
++    "WR": {
++      "tgt_k": 11.11,
++      "ypr_cv": 0.909,
++      "td_k": 8.4
++    },
++    "TE": {
++      "tgt_k": 14.63,
++      "ypr_cv": 0.847,
++      "td_k": 2.37
++    }
++  },
++  "weekly_phi": {
++    "RB": {
++      "carry_share": 5.51,
++      "target_share": 27.34,
++      "gl_carry_share": 4.35
++    },
++    "WR": {
++      "target_share": 24.45,
++      "air_yards_share": 8.51
++    },
++    "TE": {
++      "target_share": 33.54,
++      "air_yards_share": 14.58
++    }
++  },
++  "priors": {
++    "QB": {
++      "rush_att_per_dropback": 0.1075,
++      "designed_rush_rate": 0.0606,
++      "scramble_rate": 0.0468,
++      "adot": 7.324,
++      "deep_rate": 0.1082,
++      "sack_rate": 0.0632,
++      "int_rate": 0.0211,
++      "ypa": 6.6589,
++      "ypc": 4.3605,
++      "snap_share": 0.8557
++    },
++    "RB": {
++      "carry_share": 0.3897,
++      "gl_carry_share": 0.3108,
++      "targets_per_dropback": 0.0622,
++      "ypc": 4.3109,
++      "target_share": 0.0727,
++      "rec_adot": 0.3024,
++      "ez_target_share": 0.0156,
++      "ypr": 7.4423,
++      "yac_per_rec": 7.7581,
++      "snap_share": 0.4073
++    },
++    "TE": {
++      "targets_per_dropback": 0.0919,
++      "target_share": 0.1072,
++      "air_yards_share": 0.0926,
++      "rec_adot": 6.7997,
++      "deep_target_rate": 0.0717,
++      "ez_target_share": 0.1201,
++      "ypr": 10.4388,
++      "yac_per_rec": 4.8556,
++      "snap_share": 0.5612
++    },
++    "WR": {
++      "targets_per_dropback": 0.1263,
++      "target_share": 0.1475,
++      "air_yards_share": 0.1996,
++      "rec_adot": 10.717,
++      "deep_target_rate": 0.1662,
++      "ez_target_share": 0.1758,
++      "ypr": 12.6436,
++      "yac_per_rec": 4.3181,
++      "snap_share": 0.6179
++    }
++  }
++}
+diff --git a/pyproject.toml b/pyproject.toml
+index 37d18e6..ef7d454 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -30,6 +30,9 @@ include = ["backend*"]
+ 
+ [project.optional-dependencies]
+ dev = ["pytest>=8.0"]
++# offline research pipeline only (scripts/build_usage.py, fit_allocation.py,
++# build_profiles.py) -- never needed by the running app
++research = ["polars>=1.0", "pyarrow>=15.0", "scipy>=1.12", "nflreadpy>=0.1"]
+ 
+ [tool.pytest.ini_options]
+ testpaths = ["backend/tests"]
+diff --git a/scripts/build_profiles.py b/scripts/build_profiles.py
+new file mode 100644
+index 0000000..453a2fb
+--- /dev/null
++++ b/scripts/build_profiles.py
+@@ -0,0 +1,98 @@
++"""Build the per-player profile artifact for one as-of week (build item 12).
++
++Offline companion to `scripts/build_usage.py` -- reads the usage tables plus
++the fitted coefficients and emits a JSON artifact of shrunk profiles for
++every player with usage history. The app imports this via
++POST /api/profiles/import; players absent from the artifact (rookies,
++debuts) get cold-start profiles at merge time from their projection.
++
++Usage:
++    python scripts/build_profiles.py --usage ~/work/usage \
++        --coeffs backend/core/data/allocation_coeffs.json \
++        --season 2026 --week 1 --out profiles_2026_wk01.json
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++import polars as pl
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++from backend.core.profiles import (POSITION_PRIORS, UsageGame,  # noqa: E402
++                                   compute_profile)
++
++MAX_GAMES = 24          # EW history window; ~2.4% weight left at the far end
++
++USAGE_FIELDS = [f for f in UsageGame.__dataclass_fields__
++                if f not in ("season", "week", "team", "opponent")]
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--usage", required=True, type=Path)
++    ap.add_argument("--coeffs", required=True, type=Path)
++    ap.add_argument("--season", required=True, type=int)
++    ap.add_argument("--week", required=True, type=int)
++    ap.add_argument("--out", required=True, type=Path)
++    ap.add_argument("--data", type=Path, default=None,
++                    help="nflverse dir for draft-capital map (optional)")
++    args = ap.parse_args()
++
++    coeffs = json.loads(args.coeffs.read_text())
++    priors = {**POSITION_PRIORS}
++    for pos, vals in coeffs.get("priors", {}).items():
++        priors[pos] = {**priors.get(pos, {}), **vals}
++
++    u = pl.read_parquet(args.usage / "player_week_usage.parquet")
++    order_key = pl.col("season") * 100 + pl.col("week")
++    asof = args.season * 100 + args.week
++    u = u.filter(order_key < asof).sort(["gsis_id", "season", "week"])
++
++    profiles = []
++    for (gsis_id,), d in u.group_by(["gsis_id"], maintain_order=True):
++        d = d.tail(MAX_GAMES)
++        last = d.row(-1, named=True)
++        games = [
++            UsageGame(season=r["season"], week=r["week"], team=r["team"] or "",
++                      **{f: float(r.get(f) or 0.0) for f in USAGE_FIELDS})
++            for r in d.iter_rows(named=True)
++        ]
++        prof = compute_profile(
++            gsis_id=str(gsis_id), name=last["name"] or "",
++            position=last["position"], team=last["team"] or "",
++            season=args.season, week=args.week,
++            games=games, priors=priors,
++        )
++        profiles.append({
++            "gsis_id": prof.gsis_id, "name": prof.name,
++            "position": prof.position, "team": prof.team,
++            "features": {k: round(v, 5) for k, v in prof.features.items()},
++            "opportunities": {k: round(v, 2) for k, v in prof.opportunities.items()},
++            "games": prof.games_observed, "label": prof.label,
++        })
++
++    draft: dict[str, int] = {}
++    if args.data and (args.data / "draft_picks.parquet").exists():
++        dp = pl.read_parquet(args.data / "draft_picks.parquet")
++        for r in dp.filter(pl.col("gsis_id").is_not_null()).iter_rows(named=True):
++            if r.get("pick"):
++                draft[r["gsis_id"]] = int(r["pick"])
++
++    artifact = {
++        "meta": {"season": args.season, "week": args.week,
++                 "coeffs": coeffs.get("meta", {}),
++                 "n_profiles": len(profiles)},
++        "profiles": profiles,
++        "draft_capital": draft,
++    }
++    args.out.write_text(json.dumps(artifact) + "\n")
++    print(f"wrote {args.out}: {len(profiles)} profiles, "
++          f"{len(draft)} draft-capital entries")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/build_usage.py b/scripts/build_usage.py
+new file mode 100644
+index 0000000..6cfbd98
+--- /dev/null
++++ b/scripts/build_usage.py
+@@ -0,0 +1,211 @@
++"""Build player-week and team-week usage tables from nflverse parquet.
++
++Offline only (build items 12/13) -- the running app never queries pbp.
++
++Inputs (a directory of nflverse parquet, downloaded via nflreadpy):
++    pbp_<season>.parquet      play-by-play
++    player_stats.parquet      weekly player stats (position lookup)
++    snap_counts.parquet       PFR snap counts
++    ff_playerids.parquet      id crosswalk (pfr_id -> gsis_id)
++
++Outputs (--out directory):
++    player_week_usage.parquet   one row per (season, week, gsis_id) matching
++                                core.profiles.UsageGame fields
++    team_week.parquet           team-level features per (season, week, team)
++
++Usage:
++    python scripts/build_usage.py --data ~/work/data --out ~/work/usage \
++        --seasons 2019-2025
++"""
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++import polars as pl
++
++
++def parse_seasons(text: str) -> list[int]:
++    if "-" in text:
++        a, b = text.split("-")
++        return list(range(int(a), int(b) + 1))
++    return [int(s) for s in text.split(",")]
++
++
++def load_pbp(data: Path, seasons: list[int]) -> pl.LazyFrame:
++    frames = [pl.scan_parquet(data / f"pbp_{s}.parquet") for s in seasons]
++    lf = pl.concat(frames, how="vertical_relaxed")
++    return lf.filter(pl.col("season_type") == "REG").filter(
++        pl.col("two_point_attempt") != 1)
++
++
++def position_lookup(data: Path) -> pl.LazyFrame:
++    """(season, gsis_id) -> position, name from weekly player stats."""
++    ps = pl.scan_parquet(data / "player_stats.parquet")
++    return (ps.group_by(["season", "player_id"])
++            .agg(pl.col("position").drop_nulls().first(),
++                 pl.col("player_display_name").drop_nulls().first().alias("name"))
++            .rename({"player_id": "gsis_id"}))
++
++
++def build_team_game(pbp: pl.LazyFrame) -> pl.LazyFrame:
++    """Team totals per game -- denominators for share features, plus the
++    team-level profile features of section 14d."""
++    plays = pbp.filter(pl.col("play_type").is_in(["run", "pass"]))
++    return (plays.group_by(["season", "week", "game_id", "posteam"]).agg([
++        pl.len().alias("plays"),
++        pl.col("qb_dropback").sum().alias("team_dropbacks"),
++        pl.col("receiver_player_id").is_not_null().sum().alias("team_targets"),
++        pl.col("air_yards").filter(pl.col("receiver_player_id").is_not_null())
++            .sum().alias("team_air_yards"),
++        ((pl.col("air_yards") >= pl.col("yardline_100"))
++            .fill_null(False) & pl.col("receiver_player_id").is_not_null())
++            .sum().alias("team_ez_targets"),
++        ((pl.col("rush_attempt") == 1) & (pl.col("yardline_100") <= 5))
++            .sum().alias("team_gl_carries"),
++        # team-level features (14d)
++        pl.col("pass_oe").mean().alias("proe"),
++        ((pl.col("down") <= 2) & (pl.col("wp").is_between(0.2, 0.8))
++            & (pl.col("pass_attempt") == 1)).sum().alias("neutral_pass_plays"),
++        ((pl.col("down") <= 2) & (pl.col("wp").is_between(0.2, 0.8)))
++            .sum().alias("neutral_plays"),
++        ((pl.col("yardline_100") <= 20) & (pl.col("touchdown") == 1))
++            .sum().alias("rz_tds"),
++        (pl.col("yardline_100") <= 20).sum().alias("rz_plays"),
++        ((pl.col("rushing_yards") >= 10) | (pl.col("receiving_yards") >= 15))
++            .fill_null(False).sum().alias("explosive_plays"),
++    ]).rename({"posteam": "team"}))
++
++
++def build_rb_carries(pbp: pl.LazyFrame, pos: pl.LazyFrame) -> pl.LazyFrame:
++    """Team carries by RBs per game (denominator for carry_share)."""
++    rush = (pbp.filter(pl.col("rush_attempt") == 1)
++            .join(pos.rename({"gsis_id": "rusher_player_id"}),
++                  on=["season", "rusher_player_id"], how="left"))
++    return (rush.filter(pl.col("position") == "RB")
++            .group_by(["season", "week", "game_id", "posteam"])
++            .agg(pl.len().alias("team_rb_carries"))
++            .rename({"posteam": "team"}))
++
++
++def build_player_game(pbp: pl.LazyFrame) -> pl.LazyFrame:
++    """Per-player per-game usage counts from pbp (rushing/receiving/passing)."""
++    # --- rushing (includes QB scrambles; designed vs scramble split kept) ---
++    rush = (pbp.filter((pl.col("rush_attempt") == 1)
++                       & pl.col("rusher_player_id").is_not_null())
++            .group_by(["season", "week", "game_id", "posteam", "rusher_player_id"])
++            .agg([
++                ((pl.col("qb_scramble") != 1).sum()).alias("designed_rush"),
++                (pl.col("qb_scramble") == 1).sum().alias("scrambles"),
++                pl.col("rushing_yards").sum().alias("rush_yds"),
++                pl.col("rush_touchdown").sum().alias("rush_tds"),
++                ((pl.col("yardline_100") <= 5) & (pl.col("qb_scramble") != 1))
++                    .sum().alias("gl_carries"),
++            ]).rename({"rusher_player_id": "gsis_id"}))
++
++    # --- receiving ---
++    recv = (pbp.filter(pl.col("receiver_player_id").is_not_null())
++            .group_by(["season", "week", "game_id", "posteam", "receiver_player_id"])
++            .agg([
++                pl.len().alias("targets"),
++                (pl.col("complete_pass") == 1).sum().alias("receptions"),
++                pl.col("receiving_yards").sum().alias("rec_yds"),
++                pl.col("pass_touchdown").sum().alias("rec_tds"),
++                pl.col("air_yards").sum().alias("rec_air_yards"),
++                (pl.col("air_yards") >= 20).fill_null(False).sum().alias("deep_targets"),
++                (pl.col("air_yards") >= pl.col("yardline_100")).fill_null(False)
++                    .sum().alias("ez_targets"),
++                pl.col("yards_after_catch").sum().alias("yac"),
++            ]).rename({"receiver_player_id": "gsis_id"}))
++
++    # --- passing: dropback attribution (scrambles carry no passer id) ---
++    dropback_id = (pl.when(pl.col("passer_player_id").is_not_null())
++                   .then(pl.col("passer_player_id"))
++                   .when(pl.col("qb_scramble") == 1)
++                   .then(pl.col("rusher_player_id"))
++                   .otherwise(None).alias("qb_id"))
++    passing = (pbp.filter(pl.col("qb_dropback") == 1).with_columns(dropback_id)
++               .filter(pl.col("qb_id").is_not_null())
++               .group_by(["season", "week", "game_id", "posteam", "qb_id"])
++               .agg([
++                   pl.len().alias("dropbacks"),
++                   (pl.col("pass_attempt") == 1).sum().alias("pass_att"),
++                   (pl.col("complete_pass") == 1).sum().alias("completions"),
++                   pl.col("passing_yards").sum().alias("pass_yds"),
++                   pl.col("pass_touchdown").sum().alias("pass_tds"),
++                   (pl.col("interception") == 1).sum().alias("ints"),
++                   (pl.col("sack") == 1).sum().alias("sacks"),
++                   pl.col("air_yards").filter(pl.col("pass_attempt") == 1)
++                       .sum().alias("pass_air_yards"),
++                   (pl.col("air_yards") >= 20).fill_null(False).sum().alias("deep_att"),
++               ]).rename({"qb_id": "gsis_id"}))
++
++    keys = ["season", "week", "game_id", "posteam", "gsis_id"]
++    out = (rush.join(recv, on=keys, how="full", coalesce=True)
++           .join(passing, on=keys, how="full", coalesce=True))
++    return out.rename({"posteam": "team"})
++
++
++def snap_shares(data: Path) -> pl.LazyFrame:
++    ids = (pl.scan_parquet(data / "ff_playerids.parquet")
++           .select(["pfr_id", "gsis_id"]).drop_nulls())
++    sc = (pl.scan_parquet(data / "snap_counts.parquet")
++          .filter(pl.col("game_type") == "REG")
++          .join(ids, left_on="pfr_player_id", right_on="pfr_id", how="inner")
++          .select(["season", "week", "team", "gsis_id", "offense_snaps"]))
++    team_snaps = (sc.group_by(["season", "week", "team"])
++                  .agg(pl.col("offense_snaps").max().alias("team_snaps")))
++    return sc.join(team_snaps, on=["season", "week", "team"]).rename(
++        {"offense_snaps": "snaps"})
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--data", required=True, type=Path)
++    ap.add_argument("--out", required=True, type=Path)
++    ap.add_argument("--seasons", default="2019-2025")
++    args = ap.parse_args()
++    args.out.mkdir(parents=True, exist_ok=True)
++    seasons = parse_seasons(args.seasons)
++
++    pbp = load_pbp(args.data, seasons)
++    pos = position_lookup(args.data)
++
++    team_game = build_team_game(pbp)
++    rb_carries = build_rb_carries(pbp, pos)
++    player_game = build_player_game(pbp)
++
++    tkeys = ["season", "week", "game_id", "team"]
++    usage = (player_game
++             .join(pos, on=["season", "gsis_id"], how="left")
++             .join(team_game.select(tkeys + ["team_dropbacks", "team_targets",
++                                             "team_air_yards", "team_ez_targets",
++                                             "team_gl_carries"]),
++                   on=tkeys, how="left")
++             .join(rb_carries, on=tkeys, how="left")
++             .join(snap_shares(args.data),
++                   on=["season", "week", "team", "gsis_id"], how="left")
++             .with_columns([
++                 (pl.col("designed_rush").fill_null(0)
++                  + pl.col("scrambles").fill_null(0)).alias("carries"),
++             ])
++             .collect())
++
++    # fill numeric nulls with 0 (a player with no rushing rows had 0 carries)
++    numeric = [c for c, t in usage.schema.items()
++               if t in (pl.Int64, pl.UInt32, pl.Float64, pl.Int32) and
++               c not in ("season", "week")]
++    usage = usage.with_columns([pl.col(c).fill_null(0) for c in numeric])
++    usage = usage.filter(pl.col("position").is_in(["QB", "RB", "WR", "TE"]))
++    usage = usage.sort(["gsis_id", "season", "week"])
++    usage.write_parquet(args.out / "player_week_usage.parquet")
++    print(f"player_week_usage: {usage.shape[0]:,} rows "
++          f"({usage['gsis_id'].n_unique():,} players, seasons {seasons[0]}-{seasons[-1]})")
++
++    tw = team_game.collect()
++    tw.write_parquet(args.out / "team_week.parquet")
++    print(f"team_week: {tw.shape[0]:,} rows")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/fit_allocation.py b/scripts/fit_allocation.py
+new file mode 100644
+index 0000000..07a1547
+--- /dev/null
++++ b/scripts/fit_allocation.py
+@@ -0,0 +1,327 @@
++"""Fit dispersion + allocation coefficients from pbp actuals (build item 13).
++
++No projection join anywhere -- the conditional mean for every player-week is
++the exponentially weighted history of that stat (half-life 4 games, current
++week excluded), so there is no survivorship bias from projection coverage
++(requirements 1h).
++
++Fits, per position:
++
++* count dispersion  -- negative binomial k for carries (att_k), receptions
++  (tgt_k), pass attempts (cmp_k), TDs (td_k), by MLE with the NB mean fixed
++  at the EW-predicted count.
++* efficiency CV     -- gamma coefficient of variation for yards given counts
++  (ypc_cv, ypr_cv, ypa_cv), MLE with the per-unit rate fixed at the EW-
++  predicted rate.
++* share precision   -- Beta precision phi of the realised usage share around
++  the EW-predicted share (carry_share, target_share, gl_carry_share,
++  air_yards_share). This is `weekly_phi`: irreducible week-to-week role
++  variation, the input the hierarchical sim's Dirichlet draw needs.
++* position priors   -- opportunity-weighted position means for every profile
++  feature, replacing the hand-guessed POSITION_PRIORS.
++
++Honest caveat, documented rather than hidden: the EW-predicted mean carries
++estimation error, which inflates fitted dispersion slightly relative to a
++perfect-foresight mean. The live pipeline conditions on FantasyPros means,
++which are at least as good as EW history, so fitted k values are mildly
++conservative (wider than truth). That is the right side to miss on for GPP
++ceilings.
++
++Usage:
++    python scripts/fit_allocation.py --usage ~/work/usage \
++        --out backend/core/data/allocation_coeffs.json
++"""
++from __future__ import annotations
++
++import argparse
++import json
++from datetime import date
++from pathlib import Path
++
++import numpy as np
++import polars as pl
++from scipy.optimize import minimize_scalar
++from scipy.special import gammaln
++
++HALF_LIFE = 4.0
++ALPHA = 0.5 ** (1.0 / HALF_LIFE)     # per-game decay
++
++
++# --------------------------------------------------------------------------
++# EW prediction machinery (numpy, per player)
++# --------------------------------------------------------------------------
++
++def ew_pred(values: np.ndarray) -> np.ndarray:
++    """EW mean of strictly-prior observations for each index (nan for i=0)."""
++    out = np.full(len(values), np.nan)
++    s = 0.0   # EW sum of values
++    w = 0.0   # EW sum of weights
++    for i, v in enumerate(values):
++        if w > 0:
++            out[i] = s / w
++        s = s * ALPHA + v
++        w = w * ALPHA + 1.0
++    return out
++
++
++def ew_pred_ratio(num: np.ndarray, den: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
++    """EW ratio-of-sums of strictly-prior observations, plus the EW denominator
++    count (evidence) behind each prediction."""
++    pred = np.full(len(num), np.nan)
++    evid = np.zeros(len(num))
++    sn = sd = 0.0
++    for i in range(len(num)):
++        if sd > 0:
++            pred[i] = sn / sd
++            evid[i] = sd
++        sn = sn * ALPHA + num[i]
++        sd = sd * ALPHA + den[i]
++    return pred, evid
++
++
++def per_player(df: pl.DataFrame, cols: list[str]) -> dict[str, np.ndarray]:
++    """Sorted arrays plus player-group boundaries."""
++    df = df.sort(["gsis_id", "season", "week"])
++    out = {c: df[c].to_numpy() for c in cols}
++    gid = df["gsis_id"].to_numpy()
++    out["_new_player"] = np.r_[True, gid[1:] != gid[:-1]]
++    return out
++
++
++def grouped_ew(values: np.ndarray, new_player: np.ndarray,
++               den: np.ndarray | None = None):
++    """Apply ew_pred / ew_pred_ratio within player groups."""
++    pred = np.full(len(values), np.nan)
++    evid = np.zeros(len(values))
++    start = 0
++    for i in range(1, len(values) + 1):
++        if i == len(values) or new_player[i]:
++            seg = slice(start, i)
++            if den is None:
++                pred[seg] = ew_pred(values[seg])
++            else:
++                pred[seg], evid[seg] = ew_pred_ratio(values[seg], den[seg])
++            start = i
++    return pred, evid
++
++
++# --------------------------------------------------------------------------
++# Likelihoods
++# --------------------------------------------------------------------------
++
++def fit_nb_k(y: np.ndarray, mu: np.ndarray) -> float:
++    """MLE for NB dispersion k with per-observation means fixed at mu."""
++    y = np.asarray(y, float)
++    mu = np.maximum(np.asarray(mu, float), 1e-6)
++
++    def nll(log_k: float) -> float:
++        k = np.exp(log_k)
++        return -np.sum(gammaln(y + k) - gammaln(k) - gammaln(y + 1)
++                       + k * np.log(k / (k + mu)) + y * np.log(mu / (k + mu)))
++
++    res = minimize_scalar(nll, bounds=(np.log(0.3), np.log(400)), method="bounded")
++    return float(np.exp(res.x))
++
++
++def fit_gamma_cv(yards: np.ndarray, counts: np.ndarray, rate: np.ndarray) -> float:
++    """MLE for gamma CV: yards | c ~ Gamma(shape=c/cv^2, scale=rate*cv^2)."""
++    m = (counts > 0) & (rate > 0.5) & (yards > 0)
++    y, c, r = yards[m], counts[m], rate[m]
++
++    def nll(log_cv: float) -> float:
++        cv2 = np.exp(log_cv) ** 2
++        shape = c / cv2
++        scale = r * cv2
++        return -np.sum((shape - 1) * np.log(y) - y / scale
++                       - shape * np.log(scale) - gammaln(shape))
++
++    res = minimize_scalar(nll, bounds=(np.log(0.05), np.log(2.5)), method="bounded")
++    return float(np.exp(res.x))
++
++
++def fit_beta_phi(s: np.ndarray, mu: np.ndarray, n: np.ndarray,
++                 min_den: float = 8.0) -> float:
++    """MLE for Beta precision phi with means fixed at mu. `n` is the share
++    denominator, used for the standard 0/1 boundary adjustment. Shares can
++    stray outside [0,1] in odd rows (negative team air yards); those are
++    dropped."""
++    m = (mu > 0.02) & (mu < 0.95) & (n >= min_den) & (s >= 0) & (s <= 1)
++    s, mu, n = s[m], mu[m], n[m]
++    s = np.clip((s * (n - 1) + 0.5) / n, 1e-4, 1 - 1e-4)
++
++    def nll(log_phi: float) -> float:
++        phi = np.exp(log_phi)
++        a, b = mu * phi, (1 - mu) * phi
++        return -np.sum(gammaln(phi) - gammaln(a) - gammaln(b)
++                       + (a - 1) * np.log(s) + (b - 1) * np.log(1 - s))
++
++    res = minimize_scalar(nll, bounds=(np.log(0.5), np.log(300)), method="bounded")
++    return float(np.exp(res.x))
++
++
++# --------------------------------------------------------------------------
++# Fits
++# --------------------------------------------------------------------------
++
++def fit_position(u: pl.DataFrame, position: str, report: list[str]) -> dict:
++    d = u.filter(pl.col("position") == position)
++    cols = ["carries", "designed_rush", "scrambles", "rush_yds", "targets",
++            "receptions", "rec_yds", "pass_att", "pass_yds", "dropbacks",
++            "pass_tds", "rush_tds", "rec_tds"]
++    a = per_player(d, cols)
++    np_ = a["_new_player"]
++    out: dict[str, float] = {}
++
++    def sub(pred, evid, y, min_pred, min_evid=2.0):
++        m = ~np.isnan(pred) & (pred >= min_pred) & (evid >= min_evid)
++        return m
++
++    # ---- counts ----
++    if position in ("RB", "QB"):
++        pred, evid = grouped_ew(a["carries"], np_, den=np.ones(len(np_)))
++        m = sub(pred, evid, a["carries"], 3.0)
++        out["att_k"] = round(fit_nb_k(a["carries"][m], pred[m]), 2)
++        report.append(f"{position} att_k = {out['att_k']}  (n={m.sum():,})")
++
++    if position in ("RB", "WR", "TE"):
++        pred, evid = grouped_ew(a["receptions"], np_, den=np.ones(len(np_)))
++        m = sub(pred, evid, a["receptions"], 1.5)
++        out["tgt_k"] = round(fit_nb_k(a["receptions"][m], pred[m]), 2)
++        report.append(f"{position} tgt_k = {out['tgt_k']}  (n={m.sum():,})")
++
++    if position == "QB":
++        # exclude relief appearances / early exits (actual < 8 attempts):
++        # DFS conditions on a projected starter playing a full game, and
++        # benchings enter through `status`, not the count distribution.
++        pred, evid = grouped_ew(a["pass_att"], np_, den=np.ones(len(np_)))
++        m = sub(pred, evid, a["pass_att"], 15.0) & (a["pass_att"] >= 8)
++        out["cmp_k"] = round(fit_nb_k(a["pass_att"][m], pred[m]), 2)
++        report.append(f"{position} cmp_k = {out['cmp_k']}  (n={m.sum():,})")
++
++    # ---- efficiency CVs ----
++    if position in ("RB", "QB"):
++        ypc_pred, _ = grouped_ew(a["rush_yds"], np_, den=a["carries"])
++        cnt_pred, evid = grouped_ew(a["carries"], np_, den=np.ones(len(np_)))
++        m = (~np.isnan(ypc_pred) & (a["carries"] >= 5) & (evid >= 2.0)
++             & (ypc_pred > 1.0))
++        out["ypc_cv"] = round(fit_gamma_cv(a["rush_yds"][m], a["carries"][m],
++                                           ypc_pred[m]), 3)
++        report.append(f"{position} ypc_cv = {out['ypc_cv']}  (n={m.sum():,})")
++
++    if position in ("RB", "WR", "TE"):
++        ypr_pred, _ = grouped_ew(a["rec_yds"], np_, den=a["receptions"])
++        m = ~np.isnan(ypr_pred) & (a["receptions"] >= 2) & (ypr_pred > 2.0)
++        out["ypr_cv"] = round(fit_gamma_cv(a["rec_yds"][m], a["receptions"][m],
++                                           ypr_pred[m]), 3)
++        report.append(f"{position} ypr_cv = {out['ypr_cv']}  (n={m.sum():,})")
++
++    if position == "QB":
++        ypa_pred, _ = grouped_ew(a["pass_yds"], np_, den=a["pass_att"])
++        m = ~np.isnan(ypa_pred) & (a["pass_att"] >= 15) & (ypa_pred > 3.0)
++        out["ypa_cv"] = round(fit_gamma_cv(a["pass_yds"][m], a["pass_att"][m],
++                                           ypa_pred[m]), 3)
++        report.append(f"{position} ypa_cv = {out['ypa_cv']}  (n={m.sum():,})")
++
++    # ---- TD dispersion ----
++    tds = (a["pass_tds"] if position == "QB"
++           else a["rush_tds"] + a["rec_tds"])
++    pred, evid = grouped_ew(tds, np_, den=np.ones(len(np_)))
++    m = ~np.isnan(pred) & (pred >= 0.15) & (evid >= 3.0)
++    out["td_k"] = round(fit_nb_k(tds[m], pred[m]), 2)
++    report.append(f"{position} td_k = {out['td_k']}  (n={m.sum():,})")
++
++    return out
++
++
++SHARE_DEFS = {
++    # share name -> (numerator, denominator, positions, min_ew_evidence, min_game_den)
++    "carry_share": ("carries", "team_rb_carries", ("RB",), 15.0, 8.0),
++    "target_share": ("targets", "team_targets", ("RB", "WR", "TE"), 15.0, 8.0),
++    "gl_carry_share": ("gl_carries", "team_gl_carries", ("RB",), 3.0, 2.0),
++    "air_yards_share": ("rec_air_yards", "team_air_yards", ("WR", "TE"), 15.0, 8.0),
++}
++
++
++def fit_shares(u: pl.DataFrame, report: list[str]) -> dict:
++    out: dict[str, dict[str, float]] = {}
++    for name, (num, den, positions, min_evid, min_den) in SHARE_DEFS.items():
++        for position in positions:
++            d = u.filter(pl.col("position") == position)
++            a = per_player(d, [num, den])
++            pred, evid = grouped_ew(a[num], a["_new_player"], den=a[den])
++            denv = a[den].astype(float)
++            ok = (~np.isnan(pred)) & (denv > 0) & (evid >= min_evid)
++            s = a[num][ok].astype(float) / denv[ok]
++            phi = fit_beta_phi(s, pred[ok], denv[ok], min_den=min_den)
++            out.setdefault(position, {})[name] = round(phi, 2)
++            report.append(f"{position} {name} weekly_phi = {phi:.1f}  (n={ok.sum():,})")
++    return out
++
++
++def fit_priors(u: pl.DataFrame, report: list[str]) -> dict:
++    """Opportunity-weighted position means for profile features -- the
++    shrinkage targets. Ratio of total sums per position (players below the
++    profile radar shrink toward the position's typical contributor)."""
++    from backend.core.profiles import FEATURES
++
++    priors: dict[str, dict[str, float]] = {}
++    for spec in FEATURES:
++        for position in spec.positions:
++            d = u.filter(pl.col("position") == position)
++            if spec.num == "qb_rushes":
++                num = (d["designed_rush"] + d["scrambles"]).sum()
++            elif spec.num in d.columns:
++                num = d[spec.num].sum()
++            else:
++                continue
++            den = d[spec.den].sum() if spec.den in d.columns else 0
++            if den and den > 0:
++                priors.setdefault(position, {})[spec.name] = round(float(num) / float(den), 4)
++    for position, vals in priors.items():
++        report.append(f"{position} priors: {vals}")
++    return priors
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--usage", required=True, type=Path)
++    ap.add_argument("--out", required=True, type=Path)
++    ap.add_argument("--report", type=Path, default=None)
++    args = ap.parse_args()
++
++    u = pl.read_parquet(args.usage / "player_week_usage.parquet")
++    seasons = sorted(u["season"].unique().to_list())
++    report: list[str] = [f"# Allocation/dispersion fit -- seasons {seasons[0]}-{seasons[-1]}",
++                         f"rows: {len(u):,}", ""]
++
++    dispersion = {}
++    for position in ("QB", "RB", "WR", "TE"):
++        dispersion[position] = fit_position(u, position, report)
++    report.append("")
++    weekly_phi = fit_shares(u, report)
++    report.append("")
++    priors = fit_priors(u, report)
++
++    blob = {
++        "meta": {
++            "fitted": True,
++            "fitted_at": date.today().isoformat(),
++            "seasons": seasons,
++            "half_life_games": HALF_LIFE,
++            "method": "EW-conditional MLE (NB counts, gamma efficiency, Beta shares)",
++        },
++        "dispersion": dispersion,
++        "weekly_phi": weekly_phi,
++        "priors": priors,
++    }
++    args.out.parent.mkdir(parents=True, exist_ok=True)
++    args.out.write_text(json.dumps(blob, indent=2) + "\n")
++    text = "\n".join(report)
++    print(text)
++    if args.report:
++        args.report.write_text(text + "\n")
++    print(f"\nwrote {args.out}")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.43.0
+

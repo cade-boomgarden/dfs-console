@@ -1,0 +1,12 @@
+- scripts/build_usage.py: nflverse parquet -> player-week + team-week usage
+  (36,326 player-weeks, verified against known 2024 stat lines)
+- scripts/fit_allocation.py: EW-conditional MLE, no projection join (1h):
+  NB k for counts, gamma CV for efficiency, Beta phi for weekly share
+  variation, opportunity-weighted position priors
+- core/data/allocation_coeffs.json: fitted coefficients shipped as data;
+  the app never queries pbp
+- verification: simulated vs empirical points spread now within ~10% at
+  every position (old defaults: QB std 6.8 vs 8.5 empirical, RB 6.9 vs 8.3)
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XBMcj942YrXqW5nEGK36s6
