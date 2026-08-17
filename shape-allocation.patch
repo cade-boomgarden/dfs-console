@@ -1,0 +1,409 @@
+From 37b32cac92258cfef5704c6a2a5c42587d2f5039 Mon Sep 17 00:00:00 2001
+From: dev <dev@localhost>
+Date: Mon, 17 Aug 2026 00:45:14 +0000
+Subject: [PATCH] Stack shape allocation as an operator control;
+ sortable/filterable lineups
+
+Skeleton allocation is one of the two real controls (6a/6b) and was reachable
+only by hand-editing JSON. shape_allocation now takes relative weights per
+stack shape (teammates-bringback); the operator sets the mix, the model still
+chooses which game carries each shape. Zeroing a shape excludes it outright --
+verified: NAKED goes from 3/40 to 0/40 with N_eff unchanged at 9.2, so shape
+control costs no diversity.
+
+- Skeleton.shape_key / shape_label, matching solver.classify() so requested
+  and delivered mixes read identically
+- build result reports the realised shape mix next to the requested one
+- lineup table sorts on median/proj/ceiling/salary/ownership and filters by
+  type and by contained player
+---
+ backend/core/skeletons.py                   | 18 +++++
+ backend/jobs/optimize.py                    | 25 +++++-
+ backend/tests/test_core.py                  | 10 +++
+ frontend/src/components/ShapeAllocation.tsx | 86 +++++++++++++++++++++
+ frontend/src/pages/Builds.tsx               | 39 +++++++++-
+ frontend/src/pages/SetDetail.tsx            | 49 +++++++++++-
+ 6 files changed, 217 insertions(+), 10 deletions(-)
+ create mode 100644 frontend/src/components/ShapeAllocation.tsx
+
+diff --git a/backend/core/skeletons.py b/backend/core/skeletons.py
+index dad6511..7c11968 100644
+--- a/backend/core/skeletons.py
++++ b/backend/core/skeletons.py
+@@ -24,6 +24,24 @@ class Skeleton:
+     n_bringback: int      # opponents from the QB's game (0..2)
+     dst_with_qb: bool     # DST from the QB's team
+ 
++    @property
++    def shape_key(self) -> str:
++        """Stack SHAPE, independent of which game it lands in. This is the
++        allocation control (section 6a/6b): the operator decides the mix of
++        shapes, the model decides which games carry them."""
++        return f"{self.n_teammates}-{self.n_bringback}"
++
++    @property
++    def shape_label(self) -> str:
++        """Matches solver.classify() so requested and realised mixes read the
++        same way."""
++        base = {0: "NAKED", 1: "SINGLE", 2: "DOUBLE"}.get(self.n_teammates, "ONSLAUGHT")
++        if self.n_bringback >= 2:
++            return f"GAME_{base}"
++        if self.n_bringback == 1:
++            return f"{base}_W_BB"
++        return base
++
+     @property
+     def key(self) -> str:
+         return f"{self.qb_team}|{self.n_teammates}|{self.n_bringback}|{int(self.dst_with_qb)}"
+diff --git a/backend/jobs/optimize.py b/backend/jobs/optimize.py
+index 34c5c41..de6bbd5 100644
+--- a/backend/jobs/optimize.py
++++ b/backend/jobs/optimize.py
+@@ -108,6 +108,11 @@ def build_job(job_id: int) -> None:
+         include = set(cfg.get("skeleton_include") or [])
+         exclude = set(cfg.get("skeleton_exclude") or [])
+         overrides = cfg.get("skeleton_allocation") or {}
++        # shape_allocation: {"2-1": 0.30, ...} relative weights per stack shape
++        # (teammates-bringback). Any shape omitted or set to 0 is excluded.
++        shape_alloc = {k: float(v) for k, v in
++                       (cfg.get("shape_allocation") or {}).items() if float(v) > 0}
++        dst_with_qb_weight = float(cfg.get("dst_with_qb_weight", 0.25))
+ 
+         usable, weights = [], []
+         for sk in skeletons:
+@@ -116,12 +121,20 @@ def build_job(job_id: int) -> None:
+             if sk.key in exclude:
+                 continue
+             w = overrides.get(sk.key)
++            if w is None and shape_alloc:
++                # OPERATOR-driven: the shape mix is chosen by hand, the model
++                # only decides which game carries each shape (section 6a/6b).
++                # A shape at 0 never appears.
++                share = float(shape_alloc.get(sk.shape_key, 0.0))
++                w = share * (implied.get(sk.qb_team, 20.0) ** 2)
++                if sk.dst_with_qb:
++                    w *= dst_with_qb_weight
+             if w is None:
+                 # model-driven default: proportional to QB-team implied total,
+                 # tilted toward stacked shapes
+                 w = (implied.get(sk.qb_team, 20.0) ** 2) * (1.0 + 0.35 * sk.n_teammates)
+                 if sk.dst_with_qb:
+-                    w *= 0.25
++                    w *= dst_with_qb_weight
+             if w > 0:
+                 usable.append(sk)
+                 weights.append(float(w))
+@@ -217,6 +230,13 @@ def build_job(job_id: int) -> None:
+             qb_usage[qb.id] = qb_usage.get(qb.id, 0) + 1
+ 
+         # --- N_eff gate (6c / item 18) --------------------------------------------
++        # realised shape mix, so requested and delivered can be compared
++        shape_mix: dict[str, int] = {}
++        for lu in selected:
++            sk = skeleton_of(lu)
++            label = sk.shape_label if sk else "NO_QB"
++            shape_mix[label] = shape_mix.get(label, 0) + 1
++
+         neff = n_eff(scores[sel_idx]) if len(sel_idx) > 1 else float(len(sel_idx))
+ 
+         # N_eff saturates on SLATE SIZE, not lineup count: on a 12-game slate
+@@ -285,7 +305,8 @@ def build_job(job_id: int) -> None:
+         ctx.finish({"lineup_set_id": ls.id, "n_lineups": len(selected),
+                     "n_candidates": len(candidates), "n_eff": round(neff, 1),
+                     "n_eff_random": round(neff_random, 1),
+-                    "n_eff_flagged": flagged})
++                    "n_eff_flagged": flagged,
++                    "shape_mix": shape_mix})
+     except JobCancelled:
+         raise
+     finally:
+diff --git a/backend/tests/test_core.py b/backend/tests/test_core.py
+index 68e3a42..85220d0 100644
+--- a/backend/tests/test_core.py
++++ b/backend/tests/test_core.py
+@@ -106,3 +106,13 @@ def test_skeletons_and_validator():
+     issues = validate([qb] + [None] * 8, rules)   # RB in QB slot
+     assert any("not eligible" in i for i in issues)
+     assert classify(lus[0])
++
++
++def test_shape_labels_match_classify():
++    """The allocation grid and the results table must speak the same language."""
++    from backend.core.skeletons import Skeleton
++    cases = {(0, 0): "NAKED", (1, 0): "SINGLE", (2, 0): "DOUBLE",
++             (3, 0): "ONSLAUGHT", (1, 1): "SINGLE_W_BB", (2, 2): "GAME_DOUBLE"}
++    for (t, b), want in cases.items():
++        assert Skeleton("KC", "BUF", "g0", t, b, False).shape_label == want
++        assert Skeleton("KC", "BUF", "g0", t, b, False).shape_key == f"{t}-{b}"
+diff --git a/frontend/src/components/ShapeAllocation.tsx b/frontend/src/components/ShapeAllocation.tsx
+new file mode 100644
+index 0000000..cd86e03
+--- /dev/null
++++ b/frontend/src/components/ShapeAllocation.tsx
+@@ -0,0 +1,86 @@
++import { num } from "../ui";
++
++/** Stack shape allocation (requirements 6a/6b): the operator picks the mix of
++ *  shapes, the model picks which games carry them. Weights are relative and
++ *  normalised, so they read as target percentages. A shape at 0 never appears. */
++export const SHAPES: { key: string; label: string; teammates: number; bringback: number }[] = [];
++for (let t = 0; t <= 3; t++) {
++  for (let b = 0; b <= 2; b++) {
++    const base = ["NAKED", "SINGLE", "DOUBLE", "ONSLAUGHT"][t];
++    SHAPES.push({
++      key: `${t}-${b}`,
++      label: b >= 2 ? `GAME_${base}` : b === 1 ? `${base}_W_BB` : base,
++      teammates: t, bringback: b,
++    });
++  }
++}
++
++/** The model's own default mix, so "reset" is meaningful. */
++export const MODEL_DEFAULT: Record<string, number> = Object.fromEntries(
++  SHAPES.map((s) => [s.key, Math.round((1 + 0.35 * s.teammates) * 10)]),
++);
++
++export function ShapeAllocation({ value, onChange }: {
++  value: Record<string, number>;
++  onChange: (v: Record<string, number>) => void;
++}) {
++  const total = Object.values(value).reduce((a, b) => a + (b || 0), 0);
++  const pct = (k: string) => (total > 0 ? ((value[k] || 0) / total) * 100 : 0);
++  const set = (k: string, v: number) => onChange({ ...value, [k]: Math.max(0, v) });
++
++  return (
++    <div className="space-y-2">
++      <div className="flex items-baseline gap-3 flex-wrap">
++        <span className="eyebrow">Stack shape allocation</span>
++        <span className="text-[10px] text-[var(--dim)]">
++          relative weights, normalised to the target mix — 0 excludes a shape entirely
++        </span>
++        <span className="ml-auto flex gap-3">
++          <button type="button" className="text-[10px] text-[var(--dim)] hover:text-[var(--ink)]"
++            onClick={() => onChange({ ...MODEL_DEFAULT })}>reset to model</button>
++          <button type="button" className="text-[10px] text-[var(--dim)] hover:text-[var(--ink)]"
++            onClick={() => onChange(Object.fromEntries(SHAPES.map((s) => [s.key, 0])))}>clear</button>
++        </span>
++      </div>
++      <table className="w-full">
++        <thead>
++          <tr>
++            <th className="text-left text-[10px] uppercase tracking-wider text-[var(--dim)] px-1 py-1">
++              QB teammates
++            </th>
++            {["no bringback", "1 bringback", "2 bringback"].map((h) => (
++              <th key={h} className="text-[10px] uppercase tracking-wider text-[var(--dim)] px-1 py-1">{h}</th>
++            ))}
++          </tr>
++        </thead>
++        <tbody>
++          {[0, 1, 2, 3].map((t) => (
++            <tr key={t}>
++              <td className="px-1 py-1 text-[11px] text-[var(--dim)] whitespace-nowrap">
++                {["+0 (naked)", "+1", "+2", "+3"][t]}
++              </td>
++              {[0, 1, 2].map((b) => {
++                const k = `${t}-${b}`;
++                const label = SHAPES.find((s) => s.key === k)!.label;
++                const p = pct(k);
++                return (
++                  <td key={b} className="px-1 py-1">
++                    <div className={`rounded border px-2 py-1 ${p > 0 ? "border-[var(--line)]" : "border-transparent opacity-40"}`}>
++                      <div className="flex items-center gap-2">
++                        <input type="number" min={0} step={1} value={value[k] ?? 0}
++                          onChange={(e) => set(k, Number(e.target.value))}
++                          className="w-14 px-1 py-0.5 text-right" />
++                        <span className="num text-[11px] w-10 text-right">{num(p, 0)}%</span>
++                      </div>
++                      <div className="text-[9px] text-[var(--dim)] mt-0.5 truncate">{label}</div>
++                    </div>
++                  </td>
++                );
++              })}
++            </tr>
++          ))}
++        </tbody>
++      </table>
++    </div>
++  );
++}
+diff --git a/frontend/src/pages/Builds.tsx b/frontend/src/pages/Builds.tsx
+index 5f16137..234b4b0 100644
+--- a/frontend/src/pages/Builds.tsx
++++ b/frontend/src/pages/Builds.tsx
+@@ -2,6 +2,7 @@ import { useState } from "react";
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+ import { Link, useParams } from "react-router-dom";
+ import { api, Job, watchJob } from "../api";
++import { MODEL_DEFAULT, ShapeAllocation } from "../components/ShapeAllocation";
+ import { Badge, Btn, Field, num, Progress } from "../ui";
+ 
+ interface SetRow {
+@@ -19,13 +20,20 @@ export default function Builds() {
+     global_max_exposure: 0.5, max_repeat_qb: 25, min_projection: 4, label: "",
+   });
+   const [job, setJob] = useState<Job | null>(null);
++  const [shapes, setShapes] = useState<Record<string, number>>({ ...MODEL_DEFAULT });
++  const [dstWithQb, setDstWithQb] = useState(0.25);
+ 
+   const pv = slate.data?.pool_versions?.find((v: any) => v.is_current);
+ 
+   const run = async () => {
+     const { job_id } = await api.post<{ job_id: number }>(`/api/slates/${slateId}/build`, {
+       pool_version_id: pv.id,
+-      config: { ...cfg, label: cfg.label || `Build x${cfg.n_lineups}` },
++      config: {
++        ...cfg,
++        label: cfg.label || `Build x${cfg.n_lineups}`,
++        shape_allocation: shapes,
++        dst_with_qb_weight: dstWithQb,
++      },
+     });
+     watchJob(job_id, (j) => {
+       setJob(j);
+@@ -49,6 +57,18 @@ export default function Builds() {
+           <Field label="Max repeat QB"><input type="number" value={cfg.max_repeat_qb} onChange={set("max_repeat_qb")} /></Field>
+           <Field label="Min proj"><input type="number" value={cfg.min_projection} onChange={set("min_projection")} /></Field>
+         </div>
++        <div className="border-t hairline pt-3">
++          <ShapeAllocation value={shapes} onChange={setShapes} />
++          <div className="mt-2 flex items-center gap-2">
++            <span className="eyebrow">DST with QB</span>
++            <input type="number" step={0.05} min={0} className="w-20"
++              value={dstWithQb} onChange={(e) => setDstWithQb(Number(e.target.value))} />
++            <span className="text-[10px] text-[var(--dim)]">
++              multiplier applied when the DST is the QB's own team — 0 excludes it
++            </span>
++          </div>
++        </div>
++
+         <div className="flex items-end gap-3">
+           <Field label="Label"><input value={cfg.label} onChange={set("label")} placeholder="Sunday main 150-max" className="w-64" /></Field>
+           <Btn kind="primary" onClick={run} disabled={!pv?.has_sims || (job !== null && job.status === "running")}>
+@@ -58,9 +78,20 @@ export default function Builds() {
+         </div>
+         {job && job.status !== "done" && <Progress value={job.progress} message={`${job.status} — ${job.message}`} />}
+         {job?.status === "done" && (
+-          <div className="text-xs text-[var(--up)]">
+-            Built {String(job.result.n_lineups)} lineups from {String(job.result.n_candidates)} candidates ·
+-            N_eff {String(job.result.n_eff)}{job.result.n_eff_flagged ? " — FLAGGED: generator producing lookalikes" : ""}
++          <div className="space-y-1">
++            <div className="text-xs">
++              Built {String(job.result.n_lineups)} lineups from {String(job.result.n_candidates)} candidates ·
++              N<sub>eff</sub> {String(job.result.n_eff)}
++              <span className="text-[var(--dim)]"> / {String(job.result.n_eff_random)} random baseline</span>
++            </div>
++            {job.result.shape_mix != null && (
++              <div className="text-[11px] text-[var(--dim)]">
++                delivered:{" "}
++                {Object.entries(job.result.shape_mix as Record<string, number>)
++                  .sort((a, b) => b[1] - a[1])
++                  .map(([k, v]) => `${k} ${v}`).join(" · ")}
++              </div>
++            )}
+           </div>
+         )}
+       </section>
+diff --git a/frontend/src/pages/SetDetail.tsx b/frontend/src/pages/SetDetail.tsx
+index 501810d..414e7f6 100644
+--- a/frontend/src/pages/SetDetail.tsx
++++ b/frontend/src/pages/SetDetail.tsx
+@@ -23,6 +23,7 @@ interface Detail {
+ 
+ const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
+ type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
++type LineupSortKey = "ordinal" | "projection" | "ceiling" | "salary" | "ownership" | "median";
+ 
+ function Bar({ pct }: { pct: number }) {
+   return (
+@@ -38,12 +39,30 @@ export default function SetDetail() {
+     queryFn: () => api.get<Detail>(`/api/slates/${slateId}/sets/${setId}`) });
+   const [pos, setPos] = useState<string>("ALL");
+   const [sort, setSort] = useState<SortKey>("exposure");
++  const [luSort, setLuSort] = useState<LineupSortKey>("ordinal");
++  const [luDesc, setLuDesc] = useState(false);
++  const [luType, setLuType] = useState("ALL");
++  const [luQuery, setLuQuery] = useState("");
+ 
+   const rows = useMemo(() => {
+     const list = (d.data?.exposures ?? []).filter((e) => pos === "ALL" || e.position === pos);
+     return [...list].sort((a, b) => (Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity)));
+   }, [d.data, pos, sort]);
+ 
++  const lineupRows = useMemo(() => {
++    const list = (d.data?.lineups ?? []).filter((lu) => {
++      if (luType !== "ALL" && lu.lineup_type !== luType) return false;
++      if (!luQuery) return true;
++      const q = luQuery.toLowerCase();
++      return lu.slots.some((sl) => (sl.name ?? "").toLowerCase().includes(q));
++    });
++    const val = (lu: LineupDTO) =>
++      luSort === "median" ? (lu.evaluation.median ?? 0)
++        : luSort === "ordinal" ? lu.ordinal
++        : (lu[luSort] as number ?? 0);
++    return [...list].sort((a, b) => (luDesc ? val(b) - val(a) : val(a) - val(b)));
++  }, [d.data, luSort, luDesc, luType, luQuery]);
++
+   if (!d.data) return null;
+   const s = d.data;
+   const maxOv = Math.max(...s.overlap_hist, 1);
+@@ -181,23 +200,44 @@ export default function SetDetail() {
+       </section>
+ 
+       {/* ---------------- lineups ---------------- */}
+-      <section className="panel overflow-auto max-h-[60vh]">
++      <section className="panel">
++        <div className="flex items-center gap-2 px-3 py-2 border-b hairline flex-wrap">
++          <span className="eyebrow">Lineups</span>
++          <span className="num text-[var(--dim)]">{lineupRows.length} of {s.lineups.length}</span>
++          <select value={luType} onChange={(e) => setLuType(e.target.value)} className="ml-auto">
++            <option value="ALL">All types</option>
++            {Object.keys(s.type_counts).sort().map((t) => (
++              <option key={t} value={t}>{t} ({s.type_counts[t]})</option>
++            ))}
++          </select>
++          <input placeholder="Contains player…" value={luQuery}
++            onChange={(e) => setLuQuery(e.target.value)} className="w-52" />
++        </div>
++        <div className="overflow-auto max-h-[60vh]">
+         <table className="w-full">
+           <thead className="sticky top-0 bg-[var(--panel)]">
+             <tr className="border-b hairline">
+-              {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
+-                <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
++              {([["ordinal", "#"], [null, "Distribution"], ["median", "Med"],
++                 ["projection", "Proj"], ["ceiling", "Ceil"], ["salary", "Sal"],
++                 ["ownership", "Own"], [null, "Type"], [null, "Lineup"]] as
++                 [LineupSortKey | null, string][]).map(([k, h]) => (
++                <th key={h}
++                  onClick={k ? () => { luSort === k ? setLuDesc(!luDesc) : setLuSort(k); } : undefined}
++                  className={`px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)] ${k ? "cursor-pointer select-none" : ""}`}>
++                  {h}{k && luSort === k ? (luDesc ? " ↓" : " ↑") : ""}
++                </th>
+               ))}
+             </tr>
+           </thead>
+           <tbody>
+-            {s.lineups.map((lu) => (
++            {lineupRows.map((lu) => (
+               <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
+                 <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
+                 <td className="px-2 py-1.5">
+                   <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
+                     floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
+                 </td>
++                <td className="px-2 py-1.5 num">{num(lu.evaluation.median)}</td>
+                 <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
+                 <td className="px-2 py-1.5 num">{num(lu.ceiling)}</td>
+                 <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
+@@ -210,6 +250,7 @@ export default function SetDetail() {
+             ))}
+           </tbody>
+         </table>
++        </div>
+       </section>
+     </div>
+   );
+-- 
+2.43.0
+
