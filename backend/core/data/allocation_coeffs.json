@@ -12,32 +12,32 @@
       2025
     ],
     "half_life_games": 4.0,
-    "method": "EW-conditional MLE (NB counts, gamma efficiency, Beta shares)"
+    "method": "FP-projection-conditional MLE (dispersion) + EW (shares)"
   },
   "dispersion": {
     "QB": {
-      "att_k": 8.48,
-      "cmp_k": 18.15,
-      "ypc_cv": 1.608,
-      "ypa_cv": 1.56,
+      "att_k": 11.99,
+      "cmp_k": 28.68,
+      "ypa_cv": 1.543,
+      "ypc_cv": 1.425,
       "td_k": 400.0
     },
     "RB": {
-      "att_k": 4.06,
-      "tgt_k": 5.65,
-      "ypc_cv": 1.481,
-      "ypr_cv": 1.115,
-      "td_k": 6.34
+      "att_k": 7.36,
+      "tgt_k": 8.15,
+      "ypc_cv": 1.405,
+      "ypr_cv": 1.017,
+      "td_k": 400.0
     },
     "WR": {
-      "tgt_k": 11.11,
-      "ypr_cv": 0.909,
-      "td_k": 8.4
+      "tgt_k": 17.34,
+      "ypr_cv": 0.839,
+      "td_k": 400.0
     },
     "TE": {
-      "tgt_k": 14.63,
-      "ypr_cv": 0.847,
-      "td_k": 2.37
+      "tgt_k": 18.99,
+      "ypr_cv": 0.78,
+      "td_k": 24.65
     }
   },
   "weekly_phi": {
