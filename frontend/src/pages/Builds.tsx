@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, Job, watchJob } from "../api";
+import { MODEL_DEFAULT, ShapeAllocation } from "../components/ShapeAllocation";
 import { Badge, Btn, Field, num, Progress } from "../ui";
 
 interface SetRow {
@@ -19,13 +20,20 @@ export default function Builds() {
     global_max_exposure: 0.5, max_repeat_qb: 25, min_projection: 4, label: "",
   });
   const [job, setJob] = useState<Job | null>(null);
+  const [shapes, setShapes] = useState<Record<string, number>>({ ...MODEL_DEFAULT });
+  const [dstWithQb, setDstWithQb] = useState(0.25);
 
   const pv = slate.data?.pool_versions?.find((v: any) => v.is_current);
 
   const run = async () => {
     const { job_id } = await api.post<{ job_id: number }>(`/api/slates/${slateId}/build`, {
       pool_version_id: pv.id,
-      config: { ...cfg, label: cfg.label || `Build x${cfg.n_lineups}` },
+      config: {
+        ...cfg,
+        label: cfg.label || `Build x${cfg.n_lineups}`,
+        shape_allocation: shapes,
+        dst_with_qb_weight: dstWithQb,
+      },
     });
     watchJob(job_id, (j) => {
       setJob(j);
@@ -49,6 +57,18 @@ export default function Builds() {
           <Field label="Max repeat QB"><input type="number" value={cfg.max_repeat_qb} onChange={set("max_repeat_qb")} /></Field>
           <Field label="Min proj"><input type="number" value={cfg.min_projection} onChange={set("min_projection")} /></Field>
         </div>
+        <div className="border-t hairline pt-3">
+          <ShapeAllocation value={shapes} onChange={setShapes} />
+          <div className="mt-2 flex items-center gap-2">
+            <span className="eyebrow">DST with QB</span>
+            <input type="number" step={0.05} min={0} className="w-20"
+              value={dstWithQb} onChange={(e) => setDstWithQb(Number(e.target.value))} />
+            <span className="text-[10px] text-[var(--dim)]">
+              multiplier applied when the DST is the QB's own team — 0 excludes it
+            </span>
+          </div>
+        </div>
+
         <div className="flex items-end gap-3">
           <Field label="Label"><input value={cfg.label} onChange={set("label")} placeholder="Sunday main 150-max" className="w-64" /></Field>
           <Btn kind="primary" onClick={run} disabled={!pv?.has_sims || (job !== null && job.status === "running")}>
@@ -58,9 +78,20 @@ export default function Builds() {
         </div>
         {job && job.status !== "done" && <Progress value={job.progress} message={`${job.status} — ${job.message}`} />}
         {job?.status === "done" && (
-          <div className="text-xs text-[var(--up)]">
-            Built {String(job.result.n_lineups)} lineups from {String(job.result.n_candidates)} candidates ·
-            N_eff {String(job.result.n_eff)}{job.result.n_eff_flagged ? " — FLAGGED: generator producing lookalikes" : ""}
+          <div className="space-y-1">
+            <div className="text-xs">
+              Built {String(job.result.n_lineups)} lineups from {String(job.result.n_candidates)} candidates ·
+              N<sub>eff</sub> {String(job.result.n_eff)}
+              <span className="text-[var(--dim)]"> / {String(job.result.n_eff_random)} random baseline</span>
+            </div>
+            {job.result.shape_mix != null && (
+              <div className="text-[11px] text-[var(--dim)]">
+                delivered:{" "}
+                {Object.entries(job.result.shape_mix as Record<string, number>)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([k, v]) => `${k} ${v}`).join(" · ")}
+              </div>
+            )}
           </div>
         )}
       </section>

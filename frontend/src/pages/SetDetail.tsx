@@ -23,6 +23,7 @@ interface Detail {
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
 type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
+type LineupSortKey = "ordinal" | "projection" | "ceiling" | "salary" | "ownership" | "median";
 
 function Bar({ pct }: { pct: number }) {
   return (
@@ -38,11 +39,29 @@ export default function SetDetail() {
     queryFn: () => api.get<Detail>(`/api/slates/${slateId}/sets/${setId}`) });
   const [pos, setPos] = useState<string>("ALL");
   const [sort, setSort] = useState<SortKey>("exposure");
+  const [luSort, setLuSort] = useState<LineupSortKey>("ordinal");
+  const [luDesc, setLuDesc] = useState(false);
+  const [luType, setLuType] = useState("ALL");
+  const [luQuery, setLuQuery] = useState("");
 
   const rows = useMemo(() => {
     const list = (d.data?.exposures ?? []).filter((e) => pos === "ALL" || e.position === pos);
     return [...list].sort((a, b) => (Number(b[sort] ?? -Infinity) - Number(a[sort] ?? -Infinity)));
   }, [d.data, pos, sort]);
+
+  const lineupRows = useMemo(() => {
+    const list = (d.data?.lineups ?? []).filter((lu) => {
+      if (luType !== "ALL" && lu.lineup_type !== luType) return false;
+      if (!luQuery) return true;
+      const q = luQuery.toLowerCase();
+      return lu.slots.some((sl) => (sl.name ?? "").toLowerCase().includes(q));
+    });
+    const val = (lu: LineupDTO) =>
+      luSort === "median" ? (lu.evaluation.median ?? 0)
+        : luSort === "ordinal" ? lu.ordinal
+        : (lu[luSort] as number ?? 0);
+    return [...list].sort((a, b) => (luDesc ? val(b) - val(a) : val(a) - val(b)));
+  }, [d.data, luSort, luDesc, luType, luQuery]);
 
   if (!d.data) return null;
   const s = d.data;
@@ -181,23 +200,44 @@ export default function SetDetail() {
       </section>
 
       {/* ---------------- lineups ---------------- */}
-      <section className="panel overflow-auto max-h-[60vh]">
+      <section className="panel">
+        <div className="flex items-center gap-2 px-3 py-2 border-b hairline flex-wrap">
+          <span className="eyebrow">Lineups</span>
+          <span className="num text-[var(--dim)]">{lineupRows.length} of {s.lineups.length}</span>
+          <select value={luType} onChange={(e) => setLuType(e.target.value)} className="ml-auto">
+            <option value="ALL">All types</option>
+            {Object.keys(s.type_counts).sort().map((t) => (
+              <option key={t} value={t}>{t} ({s.type_counts[t]})</option>
+            ))}
+          </select>
+          <input placeholder="Contains player…" value={luQuery}
+            onChange={(e) => setLuQuery(e.target.value)} className="w-52" />
+        </div>
+        <div className="overflow-auto max-h-[60vh]">
         <table className="w-full">
           <thead className="sticky top-0 bg-[var(--panel)]">
             <tr className="border-b hairline">
-              {["#", "Distribution", "Proj", "Ceil", "Sal", "Own", "Type", "Lineup"].map((h) => (
-                <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
+              {([["ordinal", "#"], [null, "Distribution"], ["median", "Med"],
+                 ["projection", "Proj"], ["ceiling", "Ceil"], ["salary", "Sal"],
+                 ["ownership", "Own"], [null, "Type"], [null, "Lineup"]] as
+                 [LineupSortKey | null, string][]).map(([k, h]) => (
+                <th key={h}
+                  onClick={k ? () => { luSort === k ? setLuDesc(!luDesc) : setLuSort(k); } : undefined}
+                  className={`px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)] ${k ? "cursor-pointer select-none" : ""}`}>
+                  {h}{k && luSort === k ? (luDesc ? " ↓" : " ↑") : ""}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {s.lineups.map((lu) => (
+            {lineupRows.map((lu) => (
               <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
                 <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
                 <td className="px-2 py-1.5">
                   <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
                     floor={lu.evaluation.floor} median={lu.evaluation.median} ceiling={lu.evaluation.ceiling} />
                 </td>
+                <td className="px-2 py-1.5 num">{num(lu.evaluation.median)}</td>
                 <td className="px-2 py-1.5 num">{num(lu.projection)}</td>
                 <td className="px-2 py-1.5 num">{num(lu.ceiling)}</td>
                 <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
@@ -210,6 +250,7 @@ export default function SetDetail() {
             ))}
           </tbody>
         </table>
+        </div>
       </section>
     </div>
   );

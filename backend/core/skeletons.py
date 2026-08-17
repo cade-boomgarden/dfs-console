@@ -25,6 +25,24 @@ class Skeleton:
     dst_with_qb: bool     # DST from the QB's team
 
     @property
+    def shape_key(self) -> str:
+        """Stack SHAPE, independent of which game it lands in. This is the
+        allocation control (section 6a/6b): the operator decides the mix of
+        shapes, the model decides which games carry them."""
+        return f"{self.n_teammates}-{self.n_bringback}"
+
+    @property
+    def shape_label(self) -> str:
+        """Matches solver.classify() so requested and realised mixes read the
+        same way."""
+        base = {0: "NAKED", 1: "SINGLE", 2: "DOUBLE"}.get(self.n_teammates, "ONSLAUGHT")
+        if self.n_bringback >= 2:
+            return f"GAME_{base}"
+        if self.n_bringback == 1:
+            return f"{base}_W_BB"
+        return base
+
+    @property
     def key(self) -> str:
         return f"{self.qb_team}|{self.n_teammates}|{self.n_bringback}|{int(self.dst_with_qb)}"
 

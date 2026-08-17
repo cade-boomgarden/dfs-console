@@ -108,6 +108,11 @@ def build_job(job_id: int) -> None:
         include = set(cfg.get("skeleton_include") or [])
         exclude = set(cfg.get("skeleton_exclude") or [])
         overrides = cfg.get("skeleton_allocation") or {}
+        # shape_allocation: {"2-1": 0.30, ...} relative weights per stack shape
+        # (teammates-bringback). Any shape omitted or set to 0 is excluded.
+        shape_alloc = {k: float(v) for k, v in
+                       (cfg.get("shape_allocation") or {}).items() if float(v) > 0}
+        dst_with_qb_weight = float(cfg.get("dst_with_qb_weight", 0.25))
 
         usable, weights = [], []
         for sk in skeletons:
@@ -116,12 +121,20 @@ def build_job(job_id: int) -> None:
             if sk.key in exclude:
                 continue
             w = overrides.get(sk.key)
+            if w is None and shape_alloc:
+                # OPERATOR-driven: the shape mix is chosen by hand, the model
+                # only decides which game carries each shape (section 6a/6b).
+                # A shape at 0 never appears.
+                share = float(shape_alloc.get(sk.shape_key, 0.0))
+                w = share * (implied.get(sk.qb_team, 20.0) ** 2)
+                if sk.dst_with_qb:
+                    w *= dst_with_qb_weight
             if w is None:
                 # model-driven default: proportional to QB-team implied total,
                 # tilted toward stacked shapes
                 w = (implied.get(sk.qb_team, 20.0) ** 2) * (1.0 + 0.35 * sk.n_teammates)
                 if sk.dst_with_qb:
-                    w *= 0.25
+                    w *= dst_with_qb_weight
             if w > 0:
                 usable.append(sk)
                 weights.append(float(w))
@@ -217,6 +230,13 @@ def build_job(job_id: int) -> None:
             qb_usage[qb.id] = qb_usage.get(qb.id, 0) + 1
 
         # --- N_eff gate (6c / item 18) --------------------------------------------
+        # realised shape mix, so requested and delivered can be compared
+        shape_mix: dict[str, int] = {}
+        for lu in selected:
+            sk = skeleton_of(lu)
+            label = sk.shape_label if sk else "NO_QB"
+            shape_mix[label] = shape_mix.get(label, 0) + 1
+
         neff = n_eff(scores[sel_idx]) if len(sel_idx) > 1 else float(len(sel_idx))
 
         # N_eff saturates on SLATE SIZE, not lineup count: on a 12-game slate
@@ -285,7 +305,8 @@ def build_job(job_id: int) -> None:
         ctx.finish({"lineup_set_id": ls.id, "n_lineups": len(selected),
                     "n_candidates": len(candidates), "n_eff": round(neff, 1),
                     "n_eff_random": round(neff_random, 1),
-                    "n_eff_flagged": flagged})
+                    "n_eff_flagged": flagged,
+                    "shape_mix": shape_mix})
     except JobCancelled:
         raise
     finally:

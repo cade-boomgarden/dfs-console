@@ -106,3 +106,13 @@ def test_skeletons_and_validator():
     issues = validate([qb] + [None] * 8, rules)   # RB in QB slot
     assert any("not eligible" in i for i in issues)
     assert classify(lus[0])
+
+
+def test_shape_labels_match_classify():
+    """The allocation grid and the results table must speak the same language."""
+    from backend.core.skeletons import Skeleton
+    cases = {(0, 0): "NAKED", (1, 0): "SINGLE", (2, 0): "DOUBLE",
+             (3, 0): "ONSLAUGHT", (1, 1): "SINGLE_W_BB", (2, 2): "GAME_DOUBLE"}
+    for (t, b), want in cases.items():
+        assert Skeleton("KC", "BUF", "g0", t, b, False).shape_label == want
+        assert Skeleton("KC", "BUF", "g0", t, b, False).shape_key == f"{t}-{b}"
