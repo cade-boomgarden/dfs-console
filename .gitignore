@@ -9,3 +9,4 @@ frontend/dist/
 .pytest_cache/
 .venv/
 data/odds/raw/
+data/*.parquet
