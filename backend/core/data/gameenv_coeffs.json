@@ -1,0 +1,51 @@
+{
+ "meta": {
+  "fitted": true,
+  "fit_date": "2026-08-18",
+  "source": "game_lines.csv closing (<1.0h) x nflverse 2020-2025",
+  "n_games_lines": 1193,
+  "n_closing_team_games": 1550,
+  "n_team_games": 2382
+ },
+ "score": {
+  "resid_sd": 9.302,
+  "resid_skew": 0.181,
+  "home_bias": 0.0
+ },
+ "volume": {
+  "dropbacks": {
+   "b_own": -0.1338,
+   "b_opp": 0.2598
+  },
+  "rush_att": {
+   "b_own": 0.283,
+   "b_opp": -0.2455
+  },
+  "resid_sd": {
+   "dropbacks": 7.038,
+   "rush_att": 6.069
+  },
+  "resid_corr": {
+   "within_db_ra": -0.331,
+   "cross_db_db": -0.095,
+   "cross_ra_ra": -0.352,
+   "cross_db_ra": -0.125
+  },
+  "league_mean": {
+   "dropbacks": 35.77,
+   "rush_att": 27.03
+  }
+ },
+ "tds": {
+  "mean_intercept": -0.4133,
+  "mean_slope": 0.1244,
+  "sd_intercept": 0.3176,
+  "sd_slope": 0.0131,
+  "league_pass_share": 0.6138
+ },
+ "efficiency": {
+  "pass_sd": 0.248,
+  "score_corr": 0.469
+ },
+ "share_competition": 0.6
+}

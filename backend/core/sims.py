@@ -1,7 +1,9 @@
 """Build the slate simulation matrix: sims[n_sims, n_players].
 
 The primary data structure of the whole system (requirements section 0).
-Independent player draws for now (build-order item 6; correlation is item 14).
+Games with a `GameEnv` (odds-derived implied totals + FP anchors) simulate
+hierarchically with correlation (item 14, `gamesim.py`); games without one
+fall back to independent per-player draws (item 6 behaviour).
 
 Two structural requirements are honoured here because they are nearly free to
 design in and expensive to retrofit (section 15j):
@@ -18,6 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .allocation import AllocationShares
+from .gamesim import GameEnv, GameEnvCoeffs, simulate_game
 from .scoring import simulate_dst
 from .variance import Dispersion, StatLine, simulate
 
@@ -33,6 +37,8 @@ class SimPlayer:
     implied_opponent_total: float = 21.0
     dispersion: Dispersion | None = None
     variance_scale: float = 1.0          # per-player override (questionable tag etc.)
+    team: str = ""                       # abbreviation; matches GameEnv teams
+    shares: AllocationShares | None = None   # weekly_phi share noise (item 14)
 
 
 def _game_seed(global_seed: int, game_id: str) -> int:
@@ -46,11 +52,14 @@ def build_sims(
     seed: int,
     only_games: set[str] | None = None,
     base: np.ndarray | None = None,
+    envs: dict[str, GameEnv] | None = None,
+    env_coeffs: GameEnvCoeffs | None = None,
 ) -> tuple[np.ndarray, list[str]]:
     """Simulate the slate. Returns (matrix[n_sims, n_players], player_id order).
 
     Pass `only_games` + `base` for a delta run: players outside the affected
-    games keep their existing columns.
+    games keep their existing columns. Pass `envs` (game_id -> GameEnv) to
+    simulate those games hierarchically with correlation (item 14).
     """
     out = np.zeros((n_sims, len(players)), dtype=np.float32)
     if base is not None:
@@ -67,6 +76,16 @@ def build_sims(
         if only_games is not None and gid not in only_games:
             continue
         rng = np.random.default_rng(_game_seed(seed, gid))
+
+        env = (envs or {}).get(gid)
+        if env is not None:
+            cols = simulate_game(
+                rng, n_sims, env, [(i, players[i]) for i in idxs],
+                env_coeffs or GameEnvCoeffs.load())
+            for i, col in cols.items():
+                out[:, i] = col.astype(np.float32)
+            continue
+
         for i in idxs:
             p = players[i]
             if p.position == "DST":

@@ -1,28 +1,77 @@
 """Simulation job: pool version -> sims matrix (blob + resident cache).
 
-Independent player draws (build item 6). Per-game RNG partitioning is already
-in core/sims.py so the hierarchical sim (item 14) slots in without schema or
-cache changes.
+Hierarchical game simulation with correlation (build item 14): each game with
+odds-derived implied totals simulates from a shared game state (scores ->
+volume -> team TDs -> player allocation); games without lines fall back to
+independent player draws (item 6 behaviour).
 
 Dispersion is profile-driven (build items 12/13): fitted per-position
 parameters from `core/data/allocation_coeffs.json`, adjusted per player by
 their profile snapshot. Players with no snapshot (rookies, debuts) get a
 cold-start profile derived from their projection + draft capital (14f).
+Profiles also supply the weekly share-noise precisions (weekly_phi) the
+hierarchical sim's within-team allocation uses.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from ..core.allocation import AllocationCoeffs, dispersion_for
+from ..core.allocation import AllocationCoeffs, dispersion_for, shares_for
+from ..core.gamesim import GameEnv, GameEnvCoeffs, TeamEnv
 from ..core.profiles import PlayerProfile, cold_start_features
 from ..core.sims import SimPlayer, build_sims
 from ..core.variance import StatLine
 from ..models.db import SessionLocal
-from ..models.models import (Adjustment, PlayerCanonical, PoolPlayer,
+from ..models.models import (Adjustment, Game, PlayerCanonical, PoolPlayer,
                              PoolVersion, ProfileSnapshot)
 from ..settings import get_settings
 from . import simscache
 from .runner import JobContext, register
+
+# league sack rate as share of dropbacks -- converts FP QB attempts into a
+# dropback anchor (dropbacks = attempts + sacks)
+_SACK_SHARE = 0.065
+
+
+def build_envs(games: list[Game], pool: list[PoolPlayer]) -> dict[str, GameEnv]:
+    """GameEnv per game_key, for games whose implied totals are known.
+
+    Volume/TD anchors are FP sums over the rostered pool -- means stay FP's
+    (item 12/13 rule); the environment only reshapes variance around them.
+    """
+    agg: dict[str, dict[str, float]] = {}
+    for pp in pool:
+        if pp.position == "DST":
+            continue
+        s = pp.stats or {}
+        a = agg.setdefault(pp.team, {"qb_att": 0.0, "pass_tds": 0.0,
+                                     "rush_att": 0.0, "rush_tds": 0.0})
+        if pp.position == "QB":
+            a["qb_att"] += s.get("pass_att", 0.0) or 0.0
+            a["pass_tds"] += s.get("pass_tds", 0.0) or 0.0
+        a["rush_att"] += s.get("rush_att", 0.0) or 0.0
+        a["rush_tds"] += s.get("rush_tds", 0.0) or 0.0
+
+    def team_env(team: str, implied: float) -> TeamEnv:
+        a = agg.get(team, {})
+        qb_att = a.get("qb_att", 0.0)
+        return TeamEnv(
+            team=team, implied_total=implied,
+            anchor_dropbacks=qb_att / (1.0 - _SACK_SHARE) if qb_att > 0 else 0.0,
+            anchor_rush_att=a.get("rush_att", 0.0),
+            anchor_pass_tds=a.get("pass_tds", 0.0),
+            anchor_rush_tds=a.get("rush_tds", 0.0),
+        )
+
+    envs: dict[str, GameEnv] = {}
+    for g in games:
+        if not (g.home_implied and g.away_implied):
+            continue
+        key = f"g{g.competition_id}"
+        envs[key] = GameEnv(game_id=key,
+                            home=team_env(g.home, g.home_implied),
+                            away=team_env(g.away, g.away_implied))
+    return envs
 
 
 def load_profiles(db, pool: list[PoolPlayer]) -> tuple[dict[int, PlayerProfile], int]:
@@ -109,8 +158,12 @@ def simulate_job(job_id: int) -> None:
         coeffs = AllocationCoeffs.load()
         prof_map, prof_hits = load_profiles(db, pool)
 
+        games = db.query(Game).filter_by(slate_id=pv.slate_id).all()
+        envs = build_envs(games, pool)
+
         sim_players = []
         for pp in pool:
+            prof = prof_map.get(pp.player_id)
             sim_players.append(SimPlayer(
                 player_id=str(pp.player_id),
                 game_id=pp.game_key,
@@ -118,12 +171,15 @@ def simulate_job(job_id: int) -> None:
                 line=statline_from_stats(pp.name, pp.position, pp.stats or {}),
                 dst_stats=pp.stats if pp.position == "DST" else None,
                 implied_opponent_total=pp.implied_opp_total or 21.0,
-                dispersion=dispersion_for(pp.position, coeffs,
-                                          prof_map.get(pp.player_id)),
+                dispersion=dispersion_for(pp.position, coeffs, prof),
                 variance_scale=variance_overrides.get(pp.player_id, 1.0),
+                team=pp.team,
+                shares=shares_for(prof, coeffs) if prof is not None else None,
             ))
 
-        matrix, order = build_sims(sim_players, n_sims=n_sims, seed=seed)
+        env_coeffs = GameEnvCoeffs.load()
+        matrix, order = build_sims(sim_players, n_sims=n_sims, seed=seed,
+                                   envs=envs, env_coeffs=env_coeffs)
         ctx.update(0.75, "Writing sims matrix")
 
         # write sim-derived distribution stats back onto the snapshot rows
@@ -141,10 +197,15 @@ def simulate_job(job_id: int) -> None:
         pv.n_sims = n_sims
         pv.sims_seed = seed
         db.commit()
+        n_corr = sum(1 for p in sim_players if p.game_id in envs)
         ctx.finish({"pool_version_id": pv_id, "n_sims": n_sims,
                     "n_players": len(order), "blob_key": key,
                     "profiles_used": prof_hits,
                     "cold_start": len(prof_map) - prof_hits,
-                    "coeffs_fitted": bool(coeffs.meta.get("fitted"))})
+                    "coeffs_fitted": bool(coeffs.meta.get("fitted")),
+                    "correlated_games": len(envs),
+                    "correlated_players": n_corr,
+                    "independent_players": len(order) - n_corr,
+                    "gameenv_fitted": bool(env_coeffs.meta.get("fitted"))})
     finally:
         db.close()
