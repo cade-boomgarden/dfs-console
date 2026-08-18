@@ -19,7 +19,7 @@ import random
 import numpy as np
 
 from ..core.evaluator import evaluate, n_eff, portfolio_scores
-from ..core.skeletons import Skeleton, enumerate_skeletons, skeleton_of
+from ..core.skeletons import Skeleton, compose_weights, skeleton_of
 from ..core.solver import (BuildConfig, GroupRule, InfeasibleError, Player,
                            Position, RosterRules, StackRule, build, classify)
 from ..models.db import SessionLocal
@@ -96,48 +96,48 @@ def build_job(job_id: int) -> None:
         )
 
         # --- skeleton allocation (sections 6a/6b) --------------------------------
+        # Stats, model-default basis and weight composition are shared with the
+        # browse/live-N_eff endpoints (skelcache + core.compose_weights), so
+        # the allocation the operator shaped is exactly the one that runs.
         games = db.query(Game).filter_by(slate_id=pv.slate_id).all()
         game_list = [(f"g{g.competition_id}", g.home, g.away) for g in games]
-        skeletons = enumerate_skeletons(game_list)
         implied = {}
         for g in games:
             if g.home_implied:
                 implied[g.home] = g.home_implied
             if g.away_implied:
                 implied[g.away] = g.away_implied
-        include = set(cfg.get("skeleton_include") or [])
-        exclude = set(cfg.get("skeleton_exclude") or [])
-        overrides = cfg.get("skeleton_allocation") or {}
-        # shape_allocation: {"2-1": 0.30, ...} relative weights per stack shape
+
+        from . import fieldcache, skelcache
+        base_players, _ = to_core_players(pool, {})     # unadjusted, cacheable
+        ss = skelcache.get_or_build(pv_id, game_list, base_players, sims, col_index)
+        dist, curve = None, None
+        contest_id = cfg.get("contest_id")
+        if contest_id:
+            from ..models.models import Contest
+            c = db.get(Contest, int(contest_id))
+            if c and c.payout_curve:
+                curve = c.payout_curve
+                dist = fieldcache.get(pv_id)
+        defaults, weight_basis = skelcache.default_weights(
+            ss, pv_id, dist, curve, contest_id)
+
+        # shape_allocation: {"2-1": 30, ...} relative weights per stack shape
         # (teammates-bringback). Any shape omitted or set to 0 is excluded.
         shape_alloc = {k: float(v) for k, v in
                        (cfg.get("shape_allocation") or {}).items() if float(v) > 0}
-        dst_with_qb_weight = float(cfg.get("dst_with_qb_weight", 0.25))
-
-        usable, weights = [], []
-        for sk in skeletons:
-            if include and sk.key not in include:
-                continue
-            if sk.key in exclude:
-                continue
-            w = overrides.get(sk.key)
-            if w is None and shape_alloc:
-                # OPERATOR-driven: the shape mix is chosen by hand, the model
-                # only decides which game carries each shape (section 6a/6b).
-                # A shape at 0 never appears.
-                share = float(shape_alloc.get(sk.shape_key, 0.0))
-                w = share * (implied.get(sk.qb_team, 20.0) ** 2)
-                if sk.dst_with_qb:
-                    w *= dst_with_qb_weight
-            if w is None:
-                # model-driven default: proportional to QB-team implied total,
-                # tilted toward stacked shapes
-                w = (implied.get(sk.qb_team, 20.0) ** 2) * (1.0 + 0.35 * sk.n_teammates)
-                if sk.dst_with_qb:
-                    w *= dst_with_qb_weight
-            if w > 0:
-                usable.append(sk)
-                weights.append(float(w))
+        wmap = compose_weights(
+            ss.stats,
+            shape_allocation=shape_alloc or None,
+            game_weights=cfg.get("game_weights"),
+            include=set(cfg.get("skeleton_include") or []) or None,
+            exclude=set(cfg.get("skeleton_exclude") or []) or None,
+            overrides=cfg.get("skeleton_allocation"),
+            dst_with_qb_weight=float(cfg.get("dst_with_qb_weight", 0.25)),
+            default_weights=defaults, implied=implied,
+        )
+        usable = [st.skeleton for st in ss.stats if wmap[st.skeleton.key] > 0]
+        weights = [wmap[sk.key] for sk in usable]
         if not usable:
             raise RuntimeError("Skeleton allocation excluded every skeleton")
 
@@ -146,6 +146,7 @@ def build_job(job_id: int) -> None:
         cols_of = np.array([col_index[p.id] for p in players])
         seen: set[frozenset] = set()
         candidates: list = []
+        cand_by_skeleton: dict[str, int] = {}
 
         base_cfg = dict(
             position_limits={k: int(v) for k, v in
@@ -189,6 +190,7 @@ def build_job(job_id: int) -> None:
                 continue
             seen.add(key)
             candidates.append(lu)
+            cand_by_skeleton[sk.key] = cand_by_skeleton.get(sk.key, 0) + 1
 
         if not candidates:
             raise RuntimeError("Stage A produced no candidates")
@@ -280,6 +282,8 @@ def build_job(job_id: int) -> None:
                 "n_candidates": len(candidates),
                 "n_eff_random_baseline": round(neff_random, 1),
                 "neff_ratio": ratio,
+                "weight_basis": weight_basis,
+                "candidates_by_skeleton": cand_by_skeleton,
             }},
             sims_blob_key=pv.sims_blob_key,
             n_eff=round(neff, 1), n_eff_flag=flagged, status="built",
@@ -308,6 +312,7 @@ def build_job(job_id: int) -> None:
                     "n_candidates": len(candidates), "n_eff": round(neff, 1),
                     "n_eff_random": round(neff_random, 1),
                     "n_eff_flagged": flagged,
+                    "weight_basis": weight_basis,
                     "shape_mix": shape_mix})
     except JobCancelled:
         raise

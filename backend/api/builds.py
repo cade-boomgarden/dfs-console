@@ -7,11 +7,15 @@ from sqlalchemy.orm import Session
 
 from ..auth.security import current_user
 from ..core.evaluator import portfolio_scores
+from ..core.skeletons import (allocation_counts, allocation_neff,
+                              compose_weights)
+from ..jobs import fieldcache, skelcache
+from ..jobs.poolutil import to_core_players
 from ..jobs.runner import enqueue
 from ..models.db import get_db
-from ..models.models import (Game, LineupRow, LineupSet, PoolPlayer,
+from ..models.models import (Contest, Game, LineupRow, LineupSet, PoolPlayer,
                              PoolVersion, User)
-from .deps import sims_for_pool
+from .deps import require_pool, sims_for_pool
 
 router = APIRouter(prefix="/api/slates/{slate_id}", tags=["builds"])
 
@@ -150,6 +154,111 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
         "diagnostics": (ls.config_snapshot or {}).get("_diagnostics", {}),
         "overlap_hist": overlap_hist,
         "type_counts": type_counts,
+    }
+
+
+# --------------------------------------------------------------------------
+# Skeleton allocation (item 17, section 6b): browse enumerated skeletons with
+# per-skeleton stats, and live structural N_eff for a candidate allocation.
+# --------------------------------------------------------------------------
+
+def _skeleton_set(db: Session, slate_id: int):
+    pv = require_pool(db, slate_id)
+    sims, col_index = sims_for_pool(pv.id)
+    pool = db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()
+    players, _ = to_core_players(pool, {})
+    games = db.query(Game).filter_by(slate_id=slate_id).all()
+    game_list = [(f"g{g.competition_id}", g.home, g.away) for g in games]
+    ss = skelcache.get_or_build(pv.id, game_list, players, sims, col_index)
+    implied = {}
+    for g in games:
+        if g.home_implied:
+            implied[g.home] = g.home_implied
+        if g.away_implied:
+            implied[g.away] = g.away_implied
+    return pv, ss, implied, games
+
+
+def _default_basis(db: Session, pv_id: int, ss, contest_id: int | None):
+    dist, curve = None, None
+    if contest_id:
+        c = db.get(Contest, contest_id)
+        if c and c.payout_curve:
+            curve = c.payout_curve
+            dist = fieldcache.get(pv_id)
+    return skelcache.default_weights(ss, pv_id, dist, curve, contest_id)
+
+
+@router.get("/skeleton-stats")
+def skeleton_stats_route(slate_id: int, contest_id: int | None = None,
+                         db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    pv, ss, implied, games = _skeleton_set(db, slate_id)
+    defaults, basis = _default_basis(db, pv.id, ss, contest_id)
+    return {
+        "pool_version_id": pv.id,
+        "basis": basis,                       # "payout" | "tail"
+        "n_sims_used": int(ss.S.shape[1]),
+        "games": [{
+            "game_id": f"g{g.competition_id}", "home": g.home, "away": g.away,
+            "home_implied": g.home_implied, "away_implied": g.away_implied,
+            "total": round((g.home_implied or 0) + (g.away_implied or 0), 1) or None,
+        } for g in games],
+        "skeletons": [{
+            **st.to_dict(),
+            "implied_total": implied.get(st.skeleton.qb_team),
+            "default_weight": defaults.get(st.skeleton.key, 0.0),
+        } for st in ss.stats],
+    }
+
+
+class NeffIn(BaseModel):
+    n_lineups: int = 150
+    contest_id: int | None = None
+    shape_allocation: dict[str, float] | None = None
+    game_weights: dict[str, float] | None = None
+    skeleton_include: list[str] | None = None
+    skeleton_exclude: list[str] | None = None
+    skeleton_allocation: dict[str, float] | None = None
+    dst_with_qb_weight: float = 0.25
+
+
+@router.post("/skeleton-neff")
+def skeleton_neff(slate_id: int, body: NeffIn, db: Session = Depends(get_db),
+                  user: User = Depends(current_user)):
+    pv, ss, implied, _games = _skeleton_set(db, slate_id)
+    defaults, basis = _default_basis(db, pv.id, ss, body.contest_id)
+    shape_alloc = {k: float(v) for k, v in (body.shape_allocation or {}).items()
+                   if float(v) > 0} or None
+    weights = compose_weights(
+        ss.stats,
+        shape_allocation=shape_alloc,
+        game_weights=body.game_weights,
+        include=set(body.skeleton_include or []) or None,
+        exclude=set(body.skeleton_exclude or []) or None,
+        overrides=body.skeleton_allocation,
+        dst_with_qb_weight=body.dst_with_qb_weight,
+        default_weights=defaults, implied=implied,
+    )
+    counts = allocation_counts(weights, body.n_lineups)
+    neff, contrib = allocation_neff(ss.C, ss.keys, counts)
+
+    by_game: dict[str, int] = {}
+    by_shape: dict[str, int] = {}
+    for st in ss.stats:
+        c = counts.get(st.skeleton.key, 0)
+        if c:
+            by_game[st.skeleton.game_id] = by_game.get(st.skeleton.game_id, 0) + c
+            lbl = st.skeleton.shape_label
+            by_shape[lbl] = by_shape.get(lbl, 0) + c
+    return {
+        "n_eff": round(neff, 1),
+        "n_active": len(counts),
+        "basis": basis,
+        "counts": counts,
+        "contributions": contrib,
+        "by_game": by_game,
+        "by_shape": by_shape,
     }
 
 

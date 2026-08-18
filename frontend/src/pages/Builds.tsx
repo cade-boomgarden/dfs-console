@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, Job, watchJob } from "../api";
+import { api, ContestRow, Job, watchJob } from "../api";
 import { MODEL_DEFAULT, ShapeAllocation } from "../components/ShapeAllocation";
+import { SkeletonBrowser } from "../components/SkeletonBrowser";
 import { Badge, Btn, Field, num, Progress } from "../ui";
 
 interface SetRow {
@@ -25,6 +26,13 @@ export default function Builds() {
   const [posLimits, setPosLimits] = useState<Record<string, number | "">>({
     RB: "", WR: "", TE: "",
   });
+  const [contestId, setContestId] = useState<number | null>(null);
+  const [gameWeights, setGameWeights] = useState<Record<string, number>>({});
+  const [excluded, setExcluded] = useState<string[]>([]);
+  const contests = useQuery({
+    queryKey: ["contests", slateId],
+    queryFn: () => api.get<ContestRow[]>(`/api/slates/${slateId}/contests`),
+  });
 
   const pv = slate.data?.pool_versions?.find((v: any) => v.is_current);
 
@@ -36,6 +44,10 @@ export default function Builds() {
         label: cfg.label || `Build x${cfg.n_lineups}`,
         shape_allocation: shapes,
         dst_with_qb_weight: dstWithQb,
+        contest_id: contestId,
+        game_weights: Object.fromEntries(
+          Object.entries(gameWeights).filter(([, v]) => v !== 1)),
+        skeleton_exclude: excluded,
         position_limits: Object.fromEntries(
           Object.entries(posLimits).filter(([, v]) => v !== "" && Number(v) > 0)),
       },
@@ -87,7 +99,27 @@ export default function Builds() {
             <span className="text-[10px] text-[var(--dim)]">
               multiplier applied when the DST is the QB's own team — 0 excludes it
             </span>
+            <span className="ml-auto flex items-center gap-2">
+              <span className="eyebrow">Contest</span>
+              <select value={contestId ?? ""}
+                onChange={(e) => setContestId(e.target.value ? Number(e.target.value) : null)}
+                className="px-1 py-0.5 text-[11px]">
+                <option value="">— none (tail-mass basis) —</option>
+                {contests.data?.filter((c) => c.has_payout_curve).map((c) => (
+                  <option key={c.id} value={c.id}>{c.name || c.contest_key}</option>
+                ))}
+              </select>
+            </span>
           </div>
+        </div>
+        <div className="border-t hairline pt-3">
+          <SkeletonBrowser
+            slateId={slateId!} enabled={Boolean(pv?.has_sims)}
+            nLineups={cfg.n_lineups} contestId={contestId}
+            shapes={shapes} dstWithQb={dstWithQb}
+            gameWeights={gameWeights} onGameWeights={setGameWeights}
+            excluded={excluded} onExcluded={setExcluded}
+          />
         </div>
 
         <div className="flex items-end gap-3">
@@ -104,6 +136,9 @@ export default function Builds() {
               Built {String(job.result.n_lineups)} lineups from {String(job.result.n_candidates)} candidates ·
               N<sub>eff</sub> {String(job.result.n_eff)}
               <span className="text-[var(--dim)]"> / {String(job.result.n_eff_random)} random baseline</span>
+              {job.result.weight_basis != null && (
+                <span className="text-[var(--dim)]"> · {String(job.result.weight_basis)} basis</span>
+              )}
             </div>
             {job.result.shape_mix != null && (
               <div className="text-[11px] text-[var(--dim)]">

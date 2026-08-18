@@ -69,3 +69,56 @@ def test_ingest_simulate_build_end_to_end():
         assert lu.salary <= 50000
         assert len(lu.slots) == 9
     db.close()
+
+
+def test_skeleton_stats_and_live_neff_after_build():
+    """Item 17: the browse/live-N_eff path shares skelcache + compose_weights
+    with the build job, so exercise it against the same seeded DB."""
+    import numpy as np
+
+    from backend.core.skeletons import (allocation_counts, allocation_neff,
+                                        compose_weights)
+    from backend.jobs import simscache, skelcache
+    from backend.jobs.poolutil import to_core_players
+    from backend.models.models import Game
+
+    db = SessionLocal()
+    ls = db.query(LineupSet).order_by(LineupSet.id.desc()).first()
+    pv_id = ls.pool_version_id
+    diags = (ls.config_snapshot or {}).get("_diagnostics", {})
+    assert diags.get("weight_basis") == "tail"          # no field/contest in fixture
+    assert sum(diags.get("candidates_by_skeleton", {}).values()) \
+        == diags.get("n_candidates")
+
+    sims, col_index = simscache.get(pv_id)
+    pool = db.query(PoolPlayer).filter_by(pool_version_id=pv_id).all()
+    players, _ = to_core_players(pool, {})
+    games = db.query(Game).filter_by(slate_id=ls.slate_id).all()
+    game_list = [(f"g{g.competition_id}", g.home, g.away) for g in games]
+
+    ss = skelcache.get_or_build(pv_id, game_list, players, sims, col_index)
+    assert ss is skelcache.get_or_build(pv_id, game_list, players, sims, col_index)
+    feas = [st for st in ss.stats if st.feasible]
+    assert len(feas) >= len(ss.stats) * 0.5
+    for st in feas[:20]:
+        assert len(st.rep_ids) == 9 and st.salary <= 50_000
+        assert st.ceiling >= st.mean > 0
+
+    defaults, basis = skelcache.default_weights(ss, pv_id)
+    assert basis == "tail" and any(v > 0 for v in defaults.values())
+
+    silenced = feas[0].skeleton.game_id
+    w = compose_weights(ss.stats, shape_allocation={"2-1": 2.0, "1-0": 1.0},
+                        game_weights={silenced: 0.0},
+                        exclude={feas[-1].skeleton.key},
+                        default_weights=defaults)
+    assert all(w[st.skeleton.key] == 0 for st in ss.stats
+               if st.skeleton.game_id == silenced)
+    assert w[feas[-1].skeleton.key] == 0
+
+    counts = allocation_counts(w, 150)
+    assert sum(counts.values()) == 150
+    neff, contrib = allocation_neff(ss.C, ss.keys, counts)
+    assert 1.0 <= neff <= len(counts)
+    assert contrib and all(np.isfinite(v) for v in contrib.values())
+    db.close()

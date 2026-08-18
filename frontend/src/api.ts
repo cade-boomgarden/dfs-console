@@ -51,6 +51,33 @@ export interface LineupDTO {
   is_draft: boolean;
 }
 
+export interface SkeletonStat {
+  qb_team: string; opponent: string; game_id: string;
+  n_teammates: number; n_bringback: number; dst_with_qb: boolean;
+  key: string; display: string; feasible: boolean; salary: number;
+  mean: number; ceiling: number; ownership: number;
+  teammate_pool: number; bringback_pool: number;
+  implied_total: number | null; default_weight: number;
+}
+export interface SkeletonGame {
+  game_id: string; home: string; away: string;
+  home_implied: number | null; away_implied: number | null; total: number | null;
+}
+export interface SkeletonStatsResponse {
+  pool_version_id: number; basis: "payout" | "tail"; n_sims_used: number;
+  games: SkeletonGame[]; skeletons: SkeletonStat[];
+}
+export interface SkeletonNeff {
+  n_eff: number; n_active: number; basis: string;
+  counts: Record<string, number>; contributions: Record<string, number>;
+  by_game: Record<string, number>; by_shape: Record<string, number>;
+}
+export interface ContestRow {
+  id: number; contest_key: string; name: string; entry_fee: number | null;
+  field_size: number | null; max_entries_per_user: number | null;
+  n_entries: number; has_payout_curve: boolean;
+}
+
 export function watchJob(id: number, onUpdate: (j: Job) => void): () => void {
   const es = new EventSource(`/api/jobs/${id}/events`);
   es.onmessage = (e) => {
