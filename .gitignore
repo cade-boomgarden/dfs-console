@@ -10,3 +10,4 @@ frontend/dist/
 .venv/
 data/odds/raw/
 data/*.parquet
+data/contest-standings-*.csv
