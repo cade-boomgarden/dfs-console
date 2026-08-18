@@ -1,4 +1,6 @@
 """Field sampler + rank mapping tests (item 16)."""
+import zlib
+
 import numpy as np
 
 from backend.core.evaluator import evaluate
@@ -20,7 +22,10 @@ def make_pool() -> list[FieldPlayer]:
             k = 0
             for pos, cnt, sal, proj in specs:
                 for j in range(cnt):
-                    jitter = (hash((team, pos, j)) % 2000) - 1000
+                    # crc32, not hash(): str hash is PYTHONHASHSEED-dependent,
+                    # which made this fixture (and the salary-compliance
+                    # assertion downstream) flaky across processes
+                    jitter = (zlib.crc32(f"{team}|{pos}|{j}".encode()) % 2000) - 1000
                     pool.append(FieldPlayer(
                         player_id=f"{team}_{pos}{j}", position=pos, team=team,
                         opponent=opp, salary=sal + jitter,
