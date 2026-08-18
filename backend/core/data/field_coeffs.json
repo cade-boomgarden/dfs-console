@@ -1,0 +1,63 @@
+{
+ "shape": {
+  "teammates": {
+   "0": 0.3,
+   "1": 0.4,
+   "2": 0.24,
+   "3": 0.06
+  },
+  "bringback_given_stack": {
+   "0": 0.55,
+   "1": 0.37,
+   "2": 0.08
+  },
+  "bringback_given_naked": {
+   "0": 0.85,
+   "1": 0.13,
+   "2": 0.02
+  },
+  "dst_with_qb": 0.08,
+  "flex_mix": {
+   "RB": 0.5,
+   "WR": 0.38,
+   "TE": 0.12
+  },
+  "measured_n": 22,
+  "priors": true
+ },
+ "ownership": {
+  "slot_budget": {
+   "QB": 1.0,
+   "RB": 2.5,
+   "WR": 3.38,
+   "TE": 1.12,
+   "DST": 1.0
+  },
+  "value_coef": 0.9,
+  "proj_coef": 0.6,
+  "max_pct": 60.0,
+  "min_pct": 0.1,
+  "priors": true
+ },
+ "salary": {
+  "min_frac": 0.94,
+  "priors": true
+ },
+ "meta": {
+  "fitted": false,
+  "fit_date": "2026-08-18",
+  "note": "Shape seeded from 22 measured field lineups (2 preseason micro-contests); everything marked priors:true is convention, not fit. Re-estimate weekly with scripts/fit_field.py as the standings archive accumulates (15h).",
+  "standings_fit": {
+   "fit_date": "2026-08-18",
+   "files": 2,
+   "lineups": 22,
+   "partially_unresolved": 5,
+   "measured_teammates": {
+    "0": 8,
+    "1": 6,
+    "2": 8
+   },
+   "measured_dst_with_qb": 0
+  }
+ }
+}

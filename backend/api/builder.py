@@ -21,6 +21,8 @@ router = APIRouter(prefix="/api/slates/{slate_id}/builder", tags=["builder"])
 
 class LineupIn(BaseModel):
     player_ids: list[int | None]   # by slot order QB,RB,RB,WR,WR,WR,TE,FLEX,DST
+    contest_id: int | None = None  # adds expected payout/ROI vs the sampled
+                                   # field when the field job has run (item 16)
 
 
 def _core_pool(db: Session, slate_id: int, user_id: int):
@@ -52,9 +54,18 @@ def evaluate_lineup(slate_id: int, body: LineupIn, db: Session = Depends(get_db)
     lt = ""
     if len(picked) == 9:
         lt = classify(Lineup(players=tuple(picked), slots=tuple(str(i) for i in range(9))))
+    field_dist, curve, fee = None, None, 0.0
+    if body.contest_id:
+        from ..jobs import fieldcache
+        from ..models.models import Contest
+        field_dist = fieldcache.get(pv.id)
+        c = db.get(Contest, body.contest_id)
+        if c is not None:
+            curve, fee = c.payout_curve, float(c.entry_fee or 0.0)
     ev = evaluate(ids, sims, col_index,
                   {p.id: p.salary for p in players},
-                  {p.id: p.ownership for p in players}, lt)
+                  {p.id: p.ownership for p in players}, lt,
+                  field_dist=field_dist, payout_curve=curve, entry_fee=fee)
     return ev.__dict__
 
 

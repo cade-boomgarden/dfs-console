@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .api import (auth_routes, builder, builds, contests, jobs_routes, pool,
                   profiles, review, slates)
 # job registration side effects
-from .jobs import ingest, optimize, simulate  # noqa: F401
+from .jobs import field, ingest, optimize, simulate  # noqa: F401
 from .models.db import Base, engine
 from .settings import get_settings
 

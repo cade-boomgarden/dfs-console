@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .field import expected_payout
+
 
 @dataclass
 class LineupEvaluation:
@@ -27,6 +29,7 @@ class LineupEvaluation:
     product_ownership: float
     lineup_type: str
     marginal: dict[str, float] = field(default_factory=dict)  # player_id -> drop-one delta of mean
+    field_eval: dict | None = None   # expected payout / ROI vs the sampled field (item 16)
 
 
 def evaluate(
@@ -39,6 +42,9 @@ def evaluate(
     salary_cap: int = 50_000,
     n_bins: int = 40,
     with_marginals: bool = True,
+    field_dist=None,                    # core.field.FieldDist | None
+    payout_curve: list | None = None,
+    entry_fee: float = 0.0,
 ) -> LineupEvaluation:
     cols = [col_index[pid] for pid in player_ids if pid in col_index]
     block = sims[:, cols]                       # [n_sims, k]
@@ -72,6 +78,9 @@ def evaluate(
         product_ownership=prod_own,
         lineup_type=lineup_type,
         marginal=marginal,
+        field_eval=(expected_payout(totals, field_dist, payout_curve or [],
+                                    entry_fee)
+                    if field_dist is not None else None),
     )
 
 
