@@ -7,3 +7,5 @@ blobs/
 frontend/node_modules/
 frontend/dist/
 .pytest_cache/
+.venv/
+data/odds/raw/
