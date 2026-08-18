@@ -33,6 +33,22 @@ from .runner import JobContext, register
 _SACK_SHARE = 0.065
 
 
+def _lead_hours(g: Game) -> float:
+    """Hours from now to kickoff (line-movement layer, item 15). 0 when the
+    start time is unparseable -- conservative: no extra width."""
+    if not g.start_time:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+        st = datetime.fromisoformat(str(g.start_time).replace("Z", "+00:00"))
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=timezone.utc)
+        return max((st - datetime.now(timezone.utc)).total_seconds() / 3600.0,
+                   0.0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def build_envs(games: list[Game], pool: list[PoolPlayer]) -> dict[str, GameEnv]:
     """GameEnv per game_key, for games whose implied totals are known.
 
@@ -70,7 +86,8 @@ def build_envs(games: list[Game], pool: list[PoolPlayer]) -> dict[str, GameEnv]:
         key = f"g{g.competition_id}"
         envs[key] = GameEnv(game_id=key,
                             home=team_env(g.home, g.home_implied),
-                            away=team_env(g.away, g.away_implied))
+                            away=team_env(g.away, g.away_implied),
+                            lead_hours=_lead_hours(g))
     return envs
 
 
@@ -177,9 +194,13 @@ def simulate_job(job_id: int) -> None:
                 shares=shares_for(prof, coeffs) if prof is not None else None,
             ))
 
+        # model-confidence control (requirements 1e): scales the item-15
+        # parameter-uncertainty widths; 1.0 = calibrated default, 0 disables
+        unc_scale = float(payload.get("uncertainty_scale", 1.0))
         env_coeffs = GameEnvCoeffs.load()
         matrix, order = build_sims(sim_players, n_sims=n_sims, seed=seed,
-                                   envs=envs, env_coeffs=env_coeffs)
+                                   envs=envs, env_coeffs=env_coeffs,
+                                   uncertainty_scale=unc_scale)
         ctx.update(0.75, "Writing sims matrix")
 
         # write sim-derived distribution stats back onto the snapshot rows
@@ -206,6 +227,9 @@ def simulate_job(job_id: int) -> None:
                     "correlated_games": len(envs),
                     "correlated_players": n_corr,
                     "independent_players": len(order) - n_corr,
-                    "gameenv_fitted": bool(env_coeffs.meta.get("fitted"))})
+                    "gameenv_fitted": bool(env_coeffs.meta.get("fitted")),
+                    "uncertainty_scale": unc_scale,
+                    "max_lead_hours": round(max(
+                        (e.lead_hours for e in envs.values()), default=0.0), 1)})
     finally:
         db.close()

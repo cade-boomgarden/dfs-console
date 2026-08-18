@@ -47,5 +47,61 @@
   "pass_sd": 0.248,
   "score_corr": 0.469
  },
- "share_competition": 0.6
+ "share_competition": 0.6,
+ "uncertainty": {
+  "movement": {
+   "total_sd_96h": 2.0,
+   "spread_sd_96h": 1.8,
+   "horizon_h": 96.0,
+   "placeholder": true
+  },
+  "proj_error": {
+   "QB": 0.0001,
+   "RB": 0.0015,
+   "WR": 0.0,
+   "TE": 0.0,
+   "placeholder": false
+  },
+  "posterior_typical": {
+   "target_share": 40.0,
+   "carry_share": 30.0
+  },
+  "meta": {
+   "fit_date": "2026-08-18",
+   "n_player_weeks": 36753,
+   "detail": {
+    "QB:pass_att": {
+     "n": 3143,
+     "bias": 0.974,
+     "v_persistent": 0.0001,
+     "lag1_autocov": -0.0043
+    },
+    "RB:rush_att": {
+     "n": 4638,
+     "bias": 0.957,
+     "v_persistent": 0.0015,
+     "lag1_autocov": -0.0143
+    },
+    "RB:rec_rec": {
+     "n": 2895,
+     "bias": 0.99,
+     "v_persistent": 0.0,
+     "lag1_autocov": -0.0314
+    },
+    "WR:rec_rec": {
+     "n": 5785,
+     "bias": 0.989,
+     "v_persistent": 0.0,
+     "lag1_autocov": -0.0171
+    },
+    "TE:rec_rec": {
+     "n": 2445,
+     "bias": 1.041,
+     "v_persistent": 0.0,
+     "lag1_autocov": -0.0291
+    }
+   },
+   "note": "FP volume error is white week noise -- persistent and slow-moving components ~0 at every position; already inside the item-13 marginal dispersions."
+  }
+ }
 }

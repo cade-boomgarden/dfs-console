@@ -178,3 +178,78 @@ def test_variance_scale_override_still_applies():
     _, M0, idx = build_both()
     i = order.index("WR1_H")
     assert M[:, i].std() > M0[:, idx["WR1_H"]].std() * 1.25
+
+
+# --------------------------------------------------------------------------
+# item 15: parameter uncertainty
+# --------------------------------------------------------------------------
+
+def test_line_movement_widens_scores():
+    """A 96h build must carry line uncertainty; scale=0 must disable it."""
+    from backend.core.gamesim import GameEnvCoeffs, _team_layer
+    co = GameEnvCoeffs.load()
+    env0 = game_env()
+    env96 = GameEnv("g1", home=env0.home, away=env0.away, lead_hours=96.0)
+    t0 = _team_layer(np.random.default_rng(2), 60_000, env0, co, 1.0)
+    t96 = _team_layer(np.random.default_rng(2), 60_000, env96, co, 1.0)
+    toff = _team_layer(np.random.default_rng(2), 60_000, env96, co, 0.0)
+    v0, v96 = t0["HOME"]["pts"].var(), t96["HOME"]["pts"].var()
+    # expected widening: +var((dT - dS)/2) = (2.0^2 + 1.8^2)/4 ~ 1.8 pts^2
+    assert 1.0 < v96 - v0 < 3.0
+    assert abs(toff["HOME"]["pts"].var() / v0 - 1) < 0.02
+    # means stay anchored to the implied total
+    assert abs(t96["HOME"]["pts"].mean() - t0["HOME"]["pts"].mean()) < 0.25
+
+
+def test_cold_start_share_width():
+    """Thin posterior_n (cold start) must widen the player; a veteran with
+    typical posterior_n must not."""
+    from backend.core.allocation import AllocationShares
+
+    def wr(n_post):
+        base = sp("WRX", "WR", "HOME", ts=0.2, rec=5.0, rec_yds=62,
+                  rec_tds=0.4)
+        return SimPlayer(**{**base.__dict__, "shares": AllocationShares(
+            target_share=0.2, posterior_n={"target_share": n_post},
+            weekly_phi={"target_share": 24.5})})
+
+    players, env = game_players(), game_env()
+    cold = build_sims(players + [wr(4)], n_sims=N, seed=9,
+                      envs={"g1": env})[0][:, -1]
+    vet = build_sims(players + [wr(200)], n_sims=N, seed=9,
+                     envs={"g1": env})[0][:, -1]
+    assert abs(cold.mean() - vet.mean()) < 0.3
+    assert cold.std() > vet.std() * 1.04
+
+
+def test_proj_error_mixture_fattens_not_widens():
+    """With a nonzero proj_error the mixture couples a player's components:
+    tails fatten while the marginal sd stays capped."""
+    from backend.core.gamesim import _DEFAULTS, GameEnvCoeffs
+    co_on = GameEnvCoeffs(
+        score=_DEFAULTS["score"], volume=_DEFAULTS["volume"],
+        tds=_DEFAULTS["tds"], efficiency=_DEFAULTS["efficiency"],
+        uncertainty={**_DEFAULTS["uncertainty"],
+                     "proj_error": {"WR": 0.06}})
+    players, env = game_players(), game_env()
+    M1, order = build_sims(players, n_sims=N, seed=13, envs={"g1": env},
+                           env_coeffs=co_on)
+    M0, _ = build_sims(players, n_sims=N, seed=13, envs={"g1": env})
+    i = order.index("WR1_H")
+    a, b = M1[:, i], M0[:, i]
+    assert abs(a.mean() - b.mean()) < 0.3          # mean anchored
+    assert a.std() < b.std() * 1.10                # marginal capped
+    assert np.percentile(a, 99) > np.percentile(b, 99) * 0.98
+
+
+def test_uncertainty_scale_passthrough():
+    """build_sims(uncertainty_scale=0) at lead 96h reproduces the lead-0
+    run apart from movement (i.e., matches its own scale-0 baseline)."""
+    players = game_players()
+    env96 = GameEnv("g1", home=game_env().home, away=game_env().away,
+                    lead_hours=96.0)
+    a, _ = build_sims(players, n_sims=6000, seed=21, envs={"g1": env96},
+                      uncertainty_scale=0.0)
+    b, _ = build_sims(players, n_sims=6000, seed=21, envs={"g1": env96},
+                      uncertainty_scale=0.0)
+    assert np.array_equal(a, b)

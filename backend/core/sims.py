@@ -54,6 +54,7 @@ def build_sims(
     base: np.ndarray | None = None,
     envs: dict[str, GameEnv] | None = None,
     env_coeffs: GameEnvCoeffs | None = None,
+    uncertainty_scale: float = 1.0,
 ) -> tuple[np.ndarray, list[str]]:
     """Simulate the slate. Returns (matrix[n_sims, n_players], player_id order).
 
@@ -81,7 +82,8 @@ def build_sims(
         if env is not None:
             cols = simulate_game(
                 rng, n_sims, env, [(i, players[i]) for i in idxs],
-                env_coeffs or GameEnvCoeffs.load())
+                env_coeffs or GameEnvCoeffs.load(),
+                uncertainty_scale=uncertainty_scale)
             for i, col in cols.items():
                 out[:, i] = col.astype(np.float32)
             continue

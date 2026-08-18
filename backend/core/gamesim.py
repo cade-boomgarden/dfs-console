@@ -84,6 +84,30 @@ _DEFAULTS: dict = {
     # env, runs high); 1 = full zero-sum renormalisation (target competition
     # dominates, runs negative). Set by moment-matching WR1<->WR2 ~ 0.005.
     "share_competition": 0.6,
+    # -- item 15: parameter uncertainty ------------------------------------
+    # movement: line uncertainty at build lead L hours, Brownian-bridge
+    #   scaled sd(L) = sd_96h * sqrt(min(L, horizon)/horizon). PLACEHOLDER
+    #   until the in-season snapshot archive supports a real Wed->close fit
+    #   (the historical backfill has one snapshot per game).
+    # proj_error: variance of the *persistent* relative error in a player's
+    #   FP-projected mean. MEASURED ~ZERO (scripts/fit_uncertainty.py,
+    #   36,753 player-weeks 2020-2025): FP volume error is white week noise
+    #   with no persistent or slow-moving component (lag-1 autocov is
+    #   negative -- FP overcorrects to recency), and it is already inside
+    #   the item-13 FP-conditioned marginals. The mixture machinery stays:
+    #   drawn once per player per sim across all volume components + TD
+    #   weights, capped so per-component marginals never widen -- a future
+    #   projection source with real persistent error plugs in here.
+    # posterior_typical: posterior_n at which share-estimation width is
+    #   considered already priced into the pooled marginal k; players with
+    #   thinner history get the *excess* width on top (cold starts).
+    "uncertainty": {
+        "movement": {"total_sd_96h": 2.0, "spread_sd_96h": 1.8,
+                     "horizon_h": 96.0, "placeholder": True},
+        "proj_error": {"QB": 0.0001, "RB": 0.0015, "WR": 0.0, "TE": 0.0,
+                       "placeholder": False},
+        "posterior_typical": {"target_share": 40.0, "carry_share": 30.0},
+    },
 }
 
 
@@ -94,6 +118,7 @@ class GameEnvCoeffs:
     tds: dict
     efficiency: dict = field(default_factory=lambda: dict(_DEFAULTS["efficiency"]))
     share_competition: float = 0.6
+    uncertainty: dict = field(default_factory=lambda: dict(_DEFAULTS["uncertainty"]))
     meta: dict = field(default_factory=dict)
 
     @classmethod
@@ -107,6 +132,8 @@ class GameEnvCoeffs:
                        efficiency=blob.get("efficiency", _DEFAULTS["efficiency"]),
                        share_competition=blob.get(
                            "share_competition", _DEFAULTS["share_competition"]),
+                       uncertainty=blob.get("uncertainty",
+                                            _DEFAULTS["uncertainty"]),
                        meta=blob.get("meta", {}))
         return cls(score=_DEFAULTS["score"], volume=_DEFAULTS["volume"],
                    tds=_DEFAULTS["tds"], efficiency=_DEFAULTS["efficiency"],
@@ -130,6 +157,10 @@ class GameEnv:
     game_id: str
     home: TeamEnv
     away: TeamEnv
+    # hours from build time to kickoff; > 0 activates the line-movement
+    # uncertainty layer (a Wednesday build must not treat the current line
+    # as the closing line -- requirements 1f)
+    lead_hours: float = 0.0
 
     def env_for(self, team: str) -> TeamEnv | None:
         if team == self.home.team:
@@ -239,14 +270,25 @@ def _mean_one(f: np.ndarray) -> np.ndarray:
     return f / m if m > 0 else np.ones_like(f)
 
 
-def _cap_factor_var(f: np.ndarray, k_marginal: float) -> np.ndarray:
+def _lognorm_factor(rng: np.random.Generator, var: float,
+                    n: int) -> np.ndarray | float:
+    """Mean-one multiplicative lognormal noise with the given variance."""
+    if var <= 0:
+        return 1.0
+    sig = np.sqrt(np.log(1.0 + var))
+    return _mean_one(np.exp(sig * rng.standard_normal(n) - 0.5 * sig ** 2))
+
+
+def _cap_factor_var(f: np.ndarray, k_marginal: float,
+                    extra_var: float = 0.0) -> np.ndarray:
     """Shrink a mean-one count factor toward 1 so its variance never exceeds
-    the fitted marginal overdispersion 1/k_m. The item-13 marginals are the
+    the fitted marginal overdispersion 1/k_m (+ any player-specific excess,
+    e.g. cold-start share width -- item 15). The item-13 marginals are the
     calibrated total; the environment decomposes them, it must not add to
     them. Shrinking (not truncating) preserves the correlation structure."""
     if k_marginal <= 0 or not np.isfinite(k_marginal):
         return f
-    v, cap = float(f.var()), 1.0 / k_marginal
+    v, cap = float(f.var()), 1.0 / k_marginal + max(extra_var, 0.0)
     if v <= cap or v <= 0:
         return f
     return 1.0 + (f - 1.0) * np.sqrt(cap / v)
@@ -257,24 +299,39 @@ def _cap_factor_var(f: np.ndarray, k_marginal: float) -> np.ndarray:
 # --------------------------------------------------------------------------
 
 def _team_layer(rng: np.random.Generator, n: int, env: GameEnv,
-                co: GameEnvCoeffs) -> dict[str, dict]:
+                co: GameEnvCoeffs,
+                uncertainty_scale: float = 1.0) -> dict[str, dict]:
     """Draw the shared game state: per-team scores, volume factors, TD
-    counts, passing-efficiency factor."""
+    counts, passing-efficiency factor. With `env.lead_hours > 0`, each sim
+    first draws where the line will *close* (item 15 line-movement layer),
+    then the score around that drawn line."""
     sc, vo, td = co.score, co.volume, co.tds
     sd, skew = sc["resid_sd"], sc["resid_skew"]
     lm = vo["league_mean"]
     eff_sd = co.efficiency.get("pass_sd", 0.0)
 
+    # line movement: sd scales as a Brownian bridge in time-to-close
+    mv = co.uncertainty.get("movement", {})
+    d_total = d_spread = 0.0
+    if env.lead_hours > 0 and uncertainty_scale > 0:
+        hor = mv.get("horizon_h", 96.0)
+        frac = np.sqrt(min(env.lead_hours, hor) / hor) * uncertainty_scale
+        d_total = mv.get("total_sd_96h", 0.0) * frac * rng.standard_normal(n)
+        d_spread = mv.get("spread_sd_96h", 0.0) * frac * rng.standard_normal(n)
+
     teams = (env.home, env.away)
     resid = {}
     pts = {}
-    for te in teams:
+    for ti, te in enumerate(teams):
+        # implied = (total -/+ home_spread)/2 => home gets (dT - dS)/2
+        d_imp = (d_total - d_spread) / 2 if ti == 0 else (d_total + d_spread) / 2
         r = sd * _skewnorm_std(rng, skew, n)
-        p = np.clip(np.round(te.implied_total + r), 0, None)
+        p = np.clip(np.round(te.implied_total + d_imp + r), 0, None)
         # a real score is never 1; snap to the nearest attainable low scores
         p[p == 1.0] = rng.choice([0.0, 2.0], size=int((p == 1.0).sum()))
         pts[te.team] = p
-        resid[te.team] = p - te.implied_total
+        # script betas respond to the surprise vs the *drawn* line
+        resid[te.team] = p - (te.implied_total + d_imp)
 
     # volume deviations: 4-dim MVN [db_h, ra_h, db_a, ra_a] + script terms
     cc = vo["resid_corr"]
@@ -378,6 +435,27 @@ def _grouped_share_noise(rng: np.random.Generator, n: int, items: list,
     return {i: _mean_one(x) for i, x in u.items()}
 
 
+def _posterior_extra_var(p, share_name: str, typical_n: float) -> float:
+    """Excess share-estimation variance for thin-history players (item 15).
+
+    Beta(mean s, precision n) has relative variance (1-s)/(s(n+1)). The
+    pooled marginal k already prices the *typical* estimation error; players
+    with posterior_n below typical get the excess on top (cold starts)."""
+    a: AllocationShares | None = getattr(p, "shares", None)
+    if a is None:
+        return 0.0
+    s = getattr(a, share_name, 0.0) or 0.0
+    n_post = (a.posterior_n or {}).get(share_name, typical_n)
+    if s <= 0.0:
+        return 0.0
+    s = float(np.clip(s, 0.05, 0.95))
+
+    def rel_var(nn: float) -> float:
+        return (1.0 - s) / (s * (nn + 1.0))
+
+    return float(np.clip(rel_var(n_post) - rel_var(typical_n), 0.0, 0.5))
+
+
 def _share_and_phi(p, share_name: str) -> tuple[float, float]:
     """Share mean + weekly precision for one player. The share mean prefers
     the profile (it parameterises only noise width); phi is the fitted
@@ -398,9 +476,17 @@ def simulate_game(
     env: GameEnv,
     players: list,                       # list[(col_index, SimPlayer)]
     coeffs: GameEnvCoeffs,
+    uncertainty_scale: float = 1.0,
 ) -> dict[int, np.ndarray]:
-    """Simulate one game hierarchically. Returns {col_index: DK points}."""
-    tl = _team_layer(rng, n, env, coeffs)
+    """Simulate one game hierarchically. Returns {col_index: DK points}.
+
+    `uncertainty_scale` is the model-confidence control (requirements 1e):
+    it scales the item-15 parameter-uncertainty widths (line movement,
+    projection-error mixture, cold-start share width). 0 disables them."""
+    tl = _team_layer(rng, n, env, coeffs, uncertainty_scale)
+    unc = coeffs.uncertainty
+    v_proj_by_pos = unc.get("proj_error", {})
+    typ_n = unc.get("posterior_typical", {})
 
     by_team: dict[str, list] = {}
     dsts: list = []
@@ -424,15 +510,27 @@ def simulate_game(
         recv = [(i, p) for i, p in plist if p.line.rec > 0]
         rush = [(i, p) for i, p in plist if p.line.rush_att > 0]
 
+        # item 15: per-player projection-error mixture. One mean-one draw
+        # per player per sim, applied to every volume component and TD
+        # weight -- couples his components (fatter ceilings) while the
+        # variance cap keeps per-component marginals at the item-13 fit.
+        lam: dict[int, np.ndarray | float] = {}
+        for i, p in plist:
+            v = (v_proj_by_pos.get(p.position, 0.0) or 0.0) * uncertainty_scale
+            lam[i] = _lognorm_factor(rng, v, n)
+
         def _alloc(items, attr, total, team_mean):
             """{col: TD draws}; empty when the environment supplies no TDs
-            (callers fall back to independent NB)."""
+            (callers fall back to independent NB). Weights carry the
+            projection-error mixture."""
             if team_mean <= 1e-6 or not items:
                 return {}
-            ws = [max(getattr(p.line, attr), 0.0) / team_mean for _, p in items]
-            tot = sum(ws)
+            base = [max(getattr(p.line, attr), 0.0) / team_mean
+                    for _, p in items]
+            tot = sum(base)
             if tot > 1.0:                        # pool projects more TDs than
-                ws = [w / tot for w in ws]       # the env supplies: shrink
+                base = [w / tot for w in base]   # the env supplies: shrink
+            ws = [w * lam[i] for (i, _), w in zip(items, base)]
             draws = _alloc_counts(rng, total, ws)
             return {i: d for (i, _), d in zip(items, draws)}
 
@@ -440,12 +538,12 @@ def simulate_game(
         rectd_of = _alloc(recv, "rec_tds", t["pass_tds"], t["mean_pass_tds"])
         rushtd_of = _alloc(rush, "rush_tds", t["rush_tds"], t["mean_rush_tds"])
 
-        lam = coeffs.share_competition
+        comp = coeffs.share_competition
         tgt_noise = _grouped_share_noise(rng, n, recv, "target_share",
-                                         "rec", lam)
+                                         "rec", comp)
         car_noise = _grouped_share_noise(
             rng, n, [(i, p) for i, p in rush if p.position != "QB"],
-            "carry_share", "rush_att", lam)
+            "carry_share", "rush_att", comp)
 
         for i, p in plist:
             line, disp = p.line, (p.dispersion or Dispersion())
@@ -453,7 +551,7 @@ def simulate_game(
 
             # --- passing (QB) ---
             if line.pass_att > 0 or line.pass_yds > 0:
-                f = t["f_db"]
+                f = _cap_factor_var(_mean_one(t["f_db"] * lam[i]), disp.cmp_k)
                 base_att = line.pass_att or line.pass_yds / 7.0
                 kc = _conditional_k(disp.cmp_k, float(f.var()))
                 att = _nb_counts(rng, base_att * f, kc)
@@ -471,11 +569,15 @@ def simulate_game(
             # --- rushing ---
             if line.rush_att > 0:
                 if p.position == "QB":
-                    f = np.ones(n)
+                    f = _mean_one(np.ones(n) * lam[i])
                 else:
+                    xv = _posterior_extra_var(
+                        p, "carry_share",
+                        typ_n.get("carry_share", 30.0)) * uncertainty_scale
                     f = _cap_factor_var(
-                        _mean_one(t["f_ra"] * car_noise.get(i, 1.0)),
-                        disp.att_k)
+                        _mean_one(t["f_ra"] * car_noise.get(i, 1.0) * lam[i]
+                                  * _lognorm_factor(rng, xv, n)),
+                        disp.att_k, xv)
                 kc = _conditional_k(disp.att_k, float(f.var()))
                 att = _nb_counts(rng, line.rush_att * f, kc)
                 ypc = line.rush_yds / max(line.rush_att, 1e-9)
@@ -488,9 +590,13 @@ def simulate_game(
 
             # --- receiving ---
             if line.rec > 0:
+                xv = _posterior_extra_var(
+                    p, "target_share",
+                    typ_n.get("target_share", 40.0)) * uncertainty_scale
                 f = _cap_factor_var(
-                    _mean_one(t["f_db"] * tgt_noise.get(i, 1.0)),
-                    disp.tgt_k)
+                    _mean_one(t["f_db"] * tgt_noise.get(i, 1.0) * lam[i]
+                              * _lognorm_factor(rng, xv, n)),
+                    disp.tgt_k, xv)
                 kc = _conditional_k(disp.tgt_k, float(f.var()))
                 rec = _nb_counts(rng, line.rec * f, kc)
                 ypr = line.rec_yds / max(line.rec, 1e-9)
