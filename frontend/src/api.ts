@@ -47,7 +47,8 @@ export interface LineupDTO {
   id: number; ordinal: number; slots: { slot: string; player_id: number | null; name: string | null }[];
   salary: number; projection: number; ceiling: number; ownership: number;
   lineup_type: string; skeleton_key: string;
-  evaluation: { floor?: number; median?: number; ceiling?: number; histogram?: number[]; hist_edges?: number[] };
+  evaluation: { floor?: number; median?: number; ceiling?: number; histogram?: number[]; hist_edges?: number[];
+                neff_delta?: number | null; expected_payout?: number; roi?: number; p_cash?: number };
   is_draft: boolean;
 }
 

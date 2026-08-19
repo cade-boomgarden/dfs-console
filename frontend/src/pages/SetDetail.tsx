@@ -17,13 +17,15 @@ interface TeamExposure {
 interface Detail {
   id: number; kind: string; label: string; n_eff: number | null; n_eff_flag: boolean;
   lineups: LineupDTO[]; exposures: Exposure[]; team_exposures: TeamExposure[];
-  diagnostics: { n_eff_random_baseline?: number; n_candidates?: number };
+  diagnostics: { n_eff_random_baseline?: number; n_candidates?: number;
+                 selection_basis?: string; weight_basis?: string };
   overlap_hist: number[]; type_counts: Record<string, number>;
 }
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
 type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
-type LineupSortKey = "ordinal" | "projection" | "ceiling" | "salary" | "ownership" | "median";
+type LineupSortKey = "ordinal" | "projection" | "ceiling" | "salary" | "ownership"
+  | "median" | "ev" | "neff_delta";
 
 function Bar({ pct }: { pct: number }) {
   return (
@@ -58,6 +60,8 @@ export default function SetDetail() {
     });
     const val = (lu: LineupDTO) =>
       luSort === "median" ? (lu.evaluation.median ?? 0)
+        : luSort === "ev" ? (lu.evaluation.expected_payout ?? 0)
+        : luSort === "neff_delta" ? (lu.evaluation.neff_delta ?? 0)
         : luSort === "ordinal" ? lu.ordinal
         : (lu[luSort] as number ?? 0);
     return [...list].sort((a, b) => (luDesc ? val(b) - val(a) : val(a) - val(b)));
@@ -70,6 +74,8 @@ export default function SetDetail() {
   const s = d.data;
   const maxOv = Math.max(...s.overlap_hist, 1);
   const baseline = s.diagnostics?.n_eff_random_baseline;
+  const hasEv = s.lineups.some((lu) => lu.evaluation.expected_payout != null);
+  const hasDelta = s.lineups.some((lu) => lu.evaluation.neff_delta != null);
 
   const Th = ({ k, children, right }: { k?: SortKey; children: React.ReactNode; right?: boolean }) => (
     <th onClick={k ? () => setSort(k) : undefined}
@@ -94,6 +100,12 @@ export default function SetDetail() {
           </span>
         )}
         {s.n_eff_flag && <Badge>below your calibrated floor</Badge>}
+        {s.diagnostics?.selection_basis && (
+          <span className="text-[10px] text-[var(--dim)]">
+            selected by {s.diagnostics.selection_basis === "expected_payout"
+              ? "expected payout vs sampled field" : "expected score"}
+          </span>
+        )}
       </div>
 
       {/* ---------------- exposure report ---------------- */}
@@ -222,7 +234,10 @@ export default function SetDetail() {
             <tr className="border-b hairline">
               {([["ordinal", "#"], [null, `Distribution ${domain ? `(${domain[0].toFixed(0)}–${domain[1].toFixed(0)})` : ""}`], ["median", "Med"],
                  ["projection", "Proj"], ["ceiling", "Ceil"], ["salary", "Sal"],
-                 ["ownership", "Own"], [null, "Type"], [null, "Lineup"]] as
+                 ["ownership", "Own"],
+                 ...(hasEv ? [["ev", "EV$"], [null, "ROI"]] : []),
+                 ...(hasDelta ? [["neff_delta", "ΔNeff"]] : []),
+                 [null, "Type"], [null, "Lineup"]] as
                  [LineupSortKey | null, string][]).map(([k, h]) => (
                 <th key={h}
                   onClick={k ? () => { luSort === k ? setLuDesc(!luDesc) : setLuSort(k); } : undefined}
@@ -246,6 +261,22 @@ export default function SetDetail() {
                 <td className="px-2 py-1.5 num">{num(lu.ceiling)}</td>
                 <td className="px-2 py-1.5 num">{money(lu.salary)}</td>
                 <td className="px-2 py-1.5 num">{num(lu.ownership, 0)}%</td>
+                {hasEv && (
+                  <>
+                    <td className="px-2 py-1.5 num">{num(lu.evaluation.expected_payout, 2)}</td>
+                    <td className="px-2 py-1.5 num">
+                      {lu.evaluation.roi != null ? `${(lu.evaluation.roi * 100).toFixed(0)}%` : "—"}
+                    </td>
+                  </>
+                )}
+                {hasDelta && (
+                  <td className="px-2 py-1.5 num"
+                    title="Leave-one-out N_eff delta — near zero means this entry adds EV but no new bet">
+                    <span className={(lu.evaluation.neff_delta ?? 1) < 0.05 ? "text-[var(--down)]" : ""}>
+                      {num(lu.evaluation.neff_delta, 2)}
+                    </span>
+                  </td>
+                )}
                 <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
                 <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
                   {lu.slots.map((sl) => sl.name).join(" · ")}

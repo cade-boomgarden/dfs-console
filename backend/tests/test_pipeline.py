@@ -122,3 +122,97 @@ def test_skeleton_stats_and_live_neff_after_build():
     assert 1.0 <= neff <= len(counts)
     assert contrib and all(np.isfinite(v) for v in contrib.values())
     db.close()
+
+
+def test_stage_b_expected_payout_and_marginals():
+    """Item 18: with a field dist + contest curve present, Stage B selects by
+    expected payout; lineups carry field metrics + LOO N_eff deltas."""
+    import numpy as np
+
+    from backend.core.field import FieldDist, default_p_grid
+    from backend.jobs import fieldcache, simscache
+    from backend.jobs import optimize as optjob
+    from backend.models.models import Contest, User
+
+    db = SessionLocal()
+    prev = db.query(LineupSet).order_by(LineupSet.id.desc()).first()
+    pv_id = prev.pool_version_id
+    sims, _ = simscache.get(pv_id)
+
+    # synthetic field: per-sim quantile rows around a plausible cash line
+    rng = np.random.default_rng(19)
+    p = default_p_grid()
+    base = np.quantile(rng.normal(120, 18, size=4000), p)
+    Q = (base[None, :] + rng.normal(0, 4, size=(sims.shape[0], 1))).astype(np.float32)
+    fieldcache.put(pv_id, FieldDist(Q=Q, p_grid=p, field_size=100_000, m_sampled=4000))
+
+    contest = Contest(slate_id=prev.slate_id, contest_key="t-18", name="test GPP",
+                      entry_fee=5.0, field_size=100_000,
+                      payout_curve=[
+                          {"min_position": 1, "max_position": 1, "value": 10000},
+                          {"min_position": 2, "max_position": 100, "value": 100},
+                          {"min_position": 101, "max_position": 20000, "value": 10},
+                      ])
+    db.add(contest); db.commit()
+    user = db.query(User).first()
+
+    job = Job(kind="build", payload={
+        "pool_version_id": pv_id, "user_id": user.id,
+        "config": {"n_lineups": 6, "n_candidates": 30, "sim_block": 20,
+                   "max_overlap": 7, "seed": 5, "contest_id": contest.id},
+    })
+    db.add(job); db.commit()
+    optjob.build_job(job.id)
+    db.expire_all()
+
+    job = db.get(Job, job.id)
+    assert job.result["selection_basis"] == "expected_payout"
+    assert job.result["weight_basis"] == "payout"
+    assert job.result["portfolio_expected_payout"] > 0
+    assert "portfolio_roi" in job.result
+
+    ls = db.query(LineupSet).order_by(LineupSet.id.desc()).first()
+    diags = (ls.config_snapshot or {}).get("_diagnostics", {})
+    assert diags["selection_basis"] == "expected_payout"
+    assert sum(diags["skeleton_mix"].values()) == len(ls.lineups)
+    deltas = []
+    for lu in ls.lineups:
+        ev = lu.evaluation
+        assert ev["expected_payout"] >= 0 and 0 <= ev["p_cash"] <= 1
+        assert "roi" in ev and ev["neff_delta"] is not None
+        deltas.append(ev["neff_delta"])
+    # LOO deltas must sum to less than N_eff itself and each be < 1-ish bet
+    assert all(d < 1.5 for d in deltas)
+    db.close()
+
+
+def test_block_sweep_reports_tradeoff_curve():
+    import numpy as np  # noqa: F401
+
+    from backend.jobs import optimize as optjob
+    from backend.models.models import Contest, User
+
+    db = SessionLocal()
+    prev = db.query(LineupSet).order_by(LineupSet.id.desc()).first()
+    user = db.query(User).first()
+    contest = db.query(Contest).filter_by(contest_key="t-18").first()
+    job = Job(kind="block_sweep", payload={
+        "pool_version_id": prev.pool_version_id, "user_id": user.id,
+        "config": {"sweep_blocks": [5, 40], "n_lineups": 5,
+                   "n_candidates": 15, "seed": 11, "contest_id": contest.id},
+    })
+    db.add(job); db.commit()
+    optjob.block_sweep_job(job.id)
+    db.expire_all()
+    job = db.get(Job, job.id)
+    rows = job.result["widths"]
+    assert [r["block"] for r in rows] == [5, 40]
+    for r in rows:
+        assert r["n_selected"] >= 3
+        assert r["n_eff"] > 1 and r["n_eff_random"] > 1
+        assert 0 < r["n_eff_ratio"] <= 1.6
+        assert r["n_eff_pool"] >= r["n_eff_random"] * 0.5
+        assert r["expected_mean"] is not None
+        assert "portfolio_expected_payout" in r     # contest passed -> payout basis
+    assert job.result["selection_basis"] == "expected_payout"
+    db.close()

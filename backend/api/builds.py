@@ -35,6 +35,19 @@ def run_build(slate_id: int, body: BuildIn, user: User = Depends(current_user)):
     return {"job_id": job_id}
 
 
+@router.post("/block-sweep")
+def run_block_sweep(slate_id: int, body: BuildIn, user: User = Depends(current_user)):
+    """Item 18: measure the 1g sim_block tradeoff -- same pipeline at several
+    block widths, reporting N_eff vs the random baseline per width. Persists
+    nothing; the result is the curve."""
+    job_id = enqueue("block_sweep", {
+        "pool_version_id": body.pool_version_id,
+        "user_id": user.id,
+        "config": body.config,
+    }, user.id)
+    return {"job_id": job_id}
+
+
 @router.get("/sets")
 def list_sets(slate_id: int, db: Session = Depends(get_db),
               user: User = Depends(current_user)):

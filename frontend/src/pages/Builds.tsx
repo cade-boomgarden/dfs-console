@@ -27,6 +27,8 @@ export default function Builds() {
     RB: "", WR: "", TE: "",
   });
   const [contestId, setContestId] = useState<number | null>(null);
+  const [sweepJob, setSweepJob] = useState<Job | null>(null);
+  const [sweepBlocks, setSweepBlocks] = useState("10,20,30,50,80");
   const [gameWeights, setGameWeights] = useState<Record<string, number>>({});
   const [excluded, setExcluded] = useState<string[]>([]);
   const contests = useQuery({
@@ -60,6 +62,28 @@ export default function Builds() {
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setCfg({ ...cfg, [k]: e.target.type === "number" ? Number(e.target.value) : e.target.value });
+
+  const runSweep = async () => {
+    const widths = sweepBlocks.split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
+    const { job_id } = await api.post<{ job_id: number }>(`/api/slates/${slateId}/block-sweep`, {
+      pool_version_id: pv.id,
+      config: {
+        n_lineups: Math.min(cfg.n_lineups, 50),
+        n_candidates: Math.min(cfg.n_candidates, 300),
+        max_overlap: cfg.max_overlap,
+        min_projection: cfg.min_projection,
+        seed: 7,
+        sweep_blocks: widths,
+        shape_allocation: shapes,
+        dst_with_qb_weight: dstWithQb,
+        contest_id: contestId,
+        game_weights: Object.fromEntries(
+          Object.entries(gameWeights).filter(([, v]) => v !== 1)),
+        skeleton_exclude: excluded,
+      },
+    });
+    watchJob(job_id, setSweepJob);
+  };
 
   return (
     <div className="space-y-6">
@@ -129,6 +153,49 @@ export default function Builds() {
           </Btn>
           {!pv?.has_sims && <span className="text-[11px] text-[var(--amber)]">Sims matrix required — see Overview.</span>}
         </div>
+        <div className="border-t hairline pt-3 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="eyebrow">Block sweep</span>
+            <span className="text-[10px] text-[var(--dim)]">
+              the 1g tradeoff, measured — same build at several sim-block widths; wider blocks
+              sharpen the objective but narrow structural spread
+            </span>
+            <input className="w-36 text-[11px]" value={sweepBlocks}
+              onChange={(e) => setSweepBlocks(e.target.value)} />
+            <Btn onClick={runSweep}
+              disabled={!pv?.has_sims || (sweepJob !== null && sweepJob.status === "running")}>
+              Run sweep
+            </Btn>
+          </div>
+          {sweepJob && sweepJob.status !== "done" && (
+            <Progress value={sweepJob.progress} message={`${sweepJob.status} — ${sweepJob.message}`} />
+          )}
+          {sweepJob?.status === "done" && Array.isArray(sweepJob.result.widths) && (
+            <table className="text-[11px]">
+              <thead>
+                <tr className="text-[9px] uppercase tracking-wider text-[var(--dim)]">
+                  {["block", "candidates", "N eff", "random", "ratio", "pool N eff",
+                    sweepJob.result.selection_basis === "expected_payout" ? "EV$/lineup" : "mean pts"]
+                    .map((h) => <th key={h} className="px-2 py-1 text-right first:text-left">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {(sweepJob.result.widths as any[]).map((r) => (
+                  <tr key={r.block} className="border-t hairline num">
+                    <td className="px-2 py-0.5">{r.block}</td>
+                    <td className="px-2 py-0.5 text-right">{r.n_candidates ?? "—"}</td>
+                    <td className="px-2 py-0.5 text-right">{r.n_eff ?? "—"}</td>
+                    <td className="px-2 py-0.5 text-right text-[var(--dim)]">{r.n_eff_random ?? "—"}</td>
+                    <td className="px-2 py-0.5 text-right">{r.n_eff_ratio ?? "—"}</td>
+                    <td className="px-2 py-0.5 text-right text-[var(--dim)]">{r.n_eff_pool ?? "—"}</td>
+                    <td className="px-2 py-0.5 text-right">{r.expected_mean ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
         {job && job.status !== "done" && <Progress value={job.progress} message={`${job.status} — ${job.message}`} />}
         {job?.status === "done" && (
           <div className="space-y-1">
@@ -138,6 +205,11 @@ export default function Builds() {
               <span className="text-[var(--dim)]"> / {String(job.result.n_eff_random)} random baseline</span>
               {job.result.weight_basis != null && (
                 <span className="text-[var(--dim)]"> · {String(job.result.weight_basis)} basis</span>
+              )}
+              {job.result.portfolio_expected_payout != null && (
+                <span> · portfolio EV ${String(job.result.portfolio_expected_payout)}
+                  {job.result.portfolio_roi != null &&
+                    ` · ROI ${(Number(job.result.portfolio_roi) * 100).toFixed(0)}%`}</span>
               )}
             </div>
             {job.result.shape_mix != null && (

@@ -394,3 +394,40 @@ def expected_payout(
         },
         "mean_exceed": round(float(e.mean()), 4),
     }
+
+
+def batch_field_metrics(
+    scores: np.ndarray,             # [n_lineups, n_sims] lineup score per sim
+    dist: FieldDist,
+    payout_curve: list[dict],
+    entry_fee: float = 0.0,
+) -> dict[str, np.ndarray]:
+    """expected_payout / roi / p_cash for MANY lineups at once (item 18:
+    Stage B selects by expected payout, and a candidate pool is hundreds to
+    thousands of lineups -- the one-lineup exceed_prob loop is O(n_sims)
+    Python per lineup and does not scale to that).
+
+    Same rank mapping as expected_payout: one pass over sims, each sim
+    interpolating every lineup's score against that sim's field quantile row,
+    then a searchsorted payout-tier lookup. Vectorised over lineups."""
+    n, n_sims = scores.shape
+    edges, pays = payout_lookup(payout_curve, dist.field_size)
+    los = edges[:, 0].astype(np.float64)
+    his = edges[:, 1].astype(np.float64)
+    p = dist.p_grid
+    ev = np.zeros(n, dtype=np.float64)
+    cash = np.zeros(n, dtype=np.float64)
+    for s in range(n_sims):
+        cdf = np.interp(scores[:, s], dist.Q[s], p, left=0.0, right=1.0)
+        ranks = 1.0 + (1.0 - cdf) * dist.field_size
+        ti = np.searchsorted(los, ranks, side="right") - 1
+        ok = (ti >= 0) & (ranks <= his[np.clip(ti, 0, len(his) - 1)] + 0.999)
+        pay = np.where(ok, pays[np.clip(ti, 0, len(pays) - 1)], 0.0)
+        ev += pay
+        cash += pay > 0
+    ev /= n_sims
+    cash /= n_sims
+    out = {"expected_payout": ev, "p_cash": cash}
+    if entry_fee > 0:
+        out["roi"] = (ev - entry_fee) / entry_fee
+    return out
