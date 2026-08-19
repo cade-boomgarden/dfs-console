@@ -282,3 +282,16 @@ class Job(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ScheduledRun(Base):
+    """One row per fired schedule slot per day (section 11e idempotency: the
+    scheduler may tick from a restarted process, or two processes may race --
+    the unique constraint makes double-firing impossible)."""
+    __tablename__ = "scheduled_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slot: Mapped[str] = mapped_column(String(32))       # "Sun 10:30" | "backup" | "watchdog ..."
+    run_date: Mapped[str] = mapped_column(String(10))   # local date, YYYY-MM-DD
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("slot", "run_date"),)

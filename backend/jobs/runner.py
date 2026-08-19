@@ -95,6 +95,15 @@ def _run(job_id: int) -> None:
             job.progress = 1.0
         job.finished_at = datetime.now(timezone.utc)
         db.commit()
+        # scheduled work failing with nobody watching is the 11e nightmare --
+        # user-triggered jobs fail visibly in the UI, so only scheduler-owned
+        # jobs (and backups, 15g) alert
+        slot = (job.payload or {}).get("scheduled_slot")
+        if status == "failed" and (slot or job.kind == "backup"):
+            from ..alerts import send_alert
+            tail = (msg or "").strip().splitlines()[-1] if msg else ""
+            send_alert(f"Scheduled job '{job.kind}' #{job.id}"
+                       f"{f' ({slot})' if slot else ''} FAILED: {tail}")
     finally:
         db.close()
 

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # --- environment ---------------------------------------------------------
     env: str = "dev"
 
+    # --- scheduler + alerting + backups (section 11e / 15g) ------------------
+    scheduler_enabled: bool = False   # DFS_SCHEDULER_ENABLED=1 on Render, in-season
+    alert_webhook_url: str = ""       # Slack/Discord-style webhook; empty = log only
+    backup_time: str = "04:00"        # daily, local (America/Chicago)
+    backup_keep: int = 14             # backups retained in the blob store
+
     # --- first-boot bootstrap (deploy convenience) ---------------------------
     # Set both on a fresh deploy to create the first account without shell
     # access, then DELETE them from the environment. Idempotent: an existing

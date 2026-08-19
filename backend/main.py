@@ -11,7 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from .api import (auth_routes, builder, builds, contests, jobs_routes, pool,
                   profiles, review, slates)
 # job registration side effects
-from .jobs import field, ingest, optimize, simulate  # noqa: F401
+from .jobs import backup, field, ingest, optimize, simulate  # noqa: F401
 from .models.db import Base, engine
 from .settings import get_settings
 
@@ -40,6 +40,12 @@ def startup() -> None:
     # dev convenience; production applies Alembic migrations instead
     Base.metadata.create_all(engine)
     _bootstrap_user()
+    if settings.scheduler_enabled:
+        # section 11e, finally wired: the ten weekly pulls + daily backup.
+        # Lives in the API process (single web service; thread job mode).
+        from .scheduler import PullScheduler
+        app.state.scheduler = PullScheduler()
+        app.state.scheduler.start()
 
 
 def _bootstrap_user() -> None:

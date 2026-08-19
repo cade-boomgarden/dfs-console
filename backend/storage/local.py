@@ -33,3 +33,19 @@ class LocalBlobStore:
 
     def exists(self, key: str) -> bool:
         return self._path(key).exists()
+
+    def list_keys(self, prefix: str) -> list[str]:
+        """Keys under a prefix, sorted. Powers backup retention (15g)."""
+        base = self.root.resolve()
+        out = []
+        for p in base.rglob("*"):
+            if p.is_file():
+                key = p.relative_to(base).as_posix()
+                if key.startswith(prefix):
+                    out.append(key)
+        return sorted(out)
+
+    def delete(self, key: str) -> None:
+        p = self._path(key)
+        if p.exists():
+            p.unlink()
