@@ -9,6 +9,19 @@ RUN npm run build
 # ---- stage 2: API image, serving the built frontend ----
 FROM python:3.12-slim
 WORKDIR /app
+# pg_dump for the scheduled backup job (15g). From the PGDG repo, not Debian's:
+# bookworm ships client 15, and pg_dump must be >= the server's major version.
+# Client 17 dumps any server <= 17; bump this if Render moves the DB to 18+.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+ && curl -fsSL https://apt.postgresql.org/pub/repos/apt/ACCC4CF8.asc \
+    | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+    > /etc/apt/sources.list.d/pgdg.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-client-17 \
+ && apt-get purge -y gnupg curl && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
 # Install dependencies from pyproject.toml alone so this layer caches across
 # code changes. This deliberately does NOT install the `backend` package --
 # hence PYTHONPATH below.

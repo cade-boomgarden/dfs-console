@@ -20,6 +20,14 @@ def _dto(j: Job) -> dict:
             "result": j.result, "created_at": str(j.created_at)}
 
 
+@router.post("/backup")
+def run_backup(user: User = Depends(current_user)):
+    """Manual backup trigger (15g) -- for the post-deploy restore test, and
+    for a belt-and-braces dump before anything scary."""
+    from ..jobs.runner import enqueue
+    return {"job_id": enqueue("backup", {"manual": True}, user.id)}
+
+
 @router.get("")
 def list_jobs(db: Session = Depends(get_db), user: User = Depends(current_user)):
     rows = db.query(Job).order_by(Job.id.desc()).limit(50).all()
