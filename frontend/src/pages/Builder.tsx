@@ -57,8 +57,7 @@ export default function Builder() {
     return (pool.data?.players ?? [])
       .filter((p) => ELIGIBLE[slotName].includes(p.position) && !inUse.has(p.player_id))
       .filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()) || p.team.toLowerCase() === q.toLowerCase())
-      .sort((a, b) => b.salary - a.salary)
-      .slice(0, 60);
+      .sort((a, b) => b.salary - a.salary);
   }, [pool.data, active, q, picked]);
 
   const pick = (id: number) => {
@@ -150,7 +149,7 @@ export default function Builder() {
           <table className="w-full">
             <thead className="sticky top-0 bg-[var(--panel)]">
               <tr className="border-b hairline">
-                {["Player", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%"].map((h) => (
+                {["Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%"].map((h) => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
                 ))}
               </tr>
@@ -160,6 +159,7 @@ export default function Builder() {
                 <tr key={p.player_id} onClick={() => pick(p.player_id)}
                   className="border-b hairline hover:bg-[var(--raised)] cursor-pointer">
                   <td className="px-2 py-1">{p.name}{p.status && <span className="ml-1 text-[var(--down)] text-[10px]">{p.status}</span>}</td>
+                  <td className="px-2 py-1 text-[var(--dim)]">{p.position}</td>
                   <td className="px-2 py-1">{p.team}</td>
                   <td className="px-2 py-1 text-[var(--dim)]">{p.opponent}</td>
                   <td className="px-2 py-1">{money(p.salary)}</td>
