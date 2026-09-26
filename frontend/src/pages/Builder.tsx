@@ -5,6 +5,8 @@ import { api, Evaluation, PoolPlayer } from "../api";
 import { Btn, DistStrip, Field, money, num } from "../ui";
 
 const SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
+const SALARY_CAP = 50000;
+const signedMoney = (v: number) => (v < 0 ? `-${money(-v)}` : money(v));
 const ELIGIBLE: Record<string, string[]> = {
   QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], DST: ["DST"], FLEX: ["RB", "WR", "TE"],
 };
@@ -29,6 +31,10 @@ export default function Builder() {
 
   const picked = slots.filter((s): s is number => s !== null);
   const salary = picked.reduce((a, id) => a + (byId.get(id)?.salary ?? 0), 0);
+  const remaining = SALARY_CAP - salary;
+  const openSlots = SLOTS.length - picked.length;
+  // floored: the average you can spend on each open slot and still fit
+  const perSlot = openSlots > 0 ? Math.floor(remaining / openSlots) : null;
 
   // live validate + evaluate, debounced -- the sub-100ms loop (section 12)
   useEffect(() => {
@@ -103,7 +109,17 @@ export default function Builder() {
         })}
         <div className="flex justify-between pt-2 num">
           <span className="text-[var(--dim)]">Salary</span>
-          <span className={salary > 50000 ? "text-[var(--down)]" : ""}>{money(salary)} / $50,000</span>
+          <span className={salary > SALARY_CAP ? "text-[var(--down)]" : ""}>{money(salary)} / {money(SALARY_CAP)}</span>
+        </div>
+        <div className="flex justify-between num">
+          <span className="text-[var(--dim)]">Remaining</span>
+          <span className={remaining < 0 ? "text-[var(--down)]" : ""}>{signedMoney(remaining)}</span>
+        </div>
+        <div className="flex justify-between num">
+          <span className="text-[var(--dim)]">Per open slot{openSlots > 0 ? ` (${openSlots})` : ""}</span>
+          <span className={perSlot !== null && perSlot < 0 ? "text-[var(--down)]" : ""}>
+            {perSlot === null ? "—" : signedMoney(perSlot)}
+          </span>
         </div>
         <div className="flex gap-2 pt-2">
           <Btn kind="primary" onClick={complete} disabled={!!busy}>Complete with optimizer</Btn>
