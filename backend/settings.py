@@ -5,6 +5,7 @@ to .env and fill it in.
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -51,3 +52,21 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def sqlalchemy_url(url: str) -> str:
+    """Pin Postgres URLs to the psycopg (v3) driver.
+
+    Render hands out plain ``postgresql://`` URLs. SQLAlchemy 2.0 maps that to
+    psycopg2 and 2.1 maps it to psycopg (v3), so an unpinned rebuild silently
+    switched drivers. Naming the driver makes the URL mean one thing.
+    """
+    for prefix in ("postgres://", "postgresql://", "postgresql+psycopg2://"):
+        if url.startswith(prefix):
+            return "postgresql+psycopg://" + url[len(prefix):]
+    return url
+
+
+def libpq_url(url: str) -> str:
+    """The same URL without a SQLAlchemy driver suffix, for pg_dump/psql."""
+    return re.sub(r"^postgres(ql)?(\+\w+)?://", "postgresql://", url)

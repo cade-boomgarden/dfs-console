@@ -131,3 +131,14 @@ def test_alert_without_webhook_logs_only():
     from backend.settings import get_settings
     assert get_settings().alert_webhook_url == ""
     assert send_alert("test alert, no webhook") is False   # logged, not raised
+
+
+def test_database_url_driver_pinning():
+    """Render's plain postgresql:// must not depend on SQLAlchemy's default
+    driver (2.0 -> psycopg2, 2.1 -> psycopg); pg_dump needs no suffix."""
+    from backend.settings import libpq_url, sqlalchemy_url
+    for raw in ("postgres://u:p@h:5432/d", "postgresql://u:p@h:5432/d",
+                "postgresql+psycopg2://u:p@h:5432/d"):
+        assert sqlalchemy_url(raw) == "postgresql+psycopg://u:p@h:5432/d"
+        assert libpq_url(sqlalchemy_url(raw)) == "postgresql://u:p@h:5432/d"
+    assert sqlalchemy_url("sqlite:///./x.db") == "sqlite:///./x.db"

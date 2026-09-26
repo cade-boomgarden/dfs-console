@@ -3,10 +3,12 @@ from sqlalchemy import engine_from_config, pool
 
 from backend.models.db import Base
 from backend.models import models  # noqa: F401 -- populate metadata
-from backend.settings import get_settings
+from backend.settings import get_settings, sqlalchemy_url
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# %-escape: ConfigParser interpolates, and passwords can contain %
+config.set_main_option("sqlalchemy.url",
+                       sqlalchemy_url(get_settings().database_url).replace("%", "%%"))
 target_metadata = Base.metadata
 
 

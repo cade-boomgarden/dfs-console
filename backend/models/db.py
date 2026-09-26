@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from ..settings import get_settings
+from ..settings import get_settings, sqlalchemy_url
 
 
 class Base(DeclarativeBase):
@@ -15,7 +15,7 @@ def _engine():
     kw = {}
     if s.database_url.startswith("sqlite"):
         kw["connect_args"] = {"check_same_thread": False}
-    return create_engine(s.database_url, **kw)
+    return create_engine(sqlalchemy_url(s.database_url), **kw)
 
 
 engine = _engine()

@@ -15,7 +15,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..settings import get_settings
+from ..settings import get_settings, libpq_url
 from .runner import JobContext, register
 from .simscache import blob_store
 
@@ -29,7 +29,7 @@ def _dump(database_url: str) -> tuple[bytes, str]:
         path = database_url.split("///", 1)[1]
         return Path(path).read_bytes(), "sqlite"
     proc = subprocess.run(
-        ["pg_dump", "--format=custom", "--no-owner", "--dbname", database_url],
+        ["pg_dump", "--format=custom", "--no-owner", "--dbname", libpq_url(database_url)],
         capture_output=True, timeout=600,
     )
     if proc.returncode != 0:

@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.0,<2.2",
     "alembic>=1.13",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
@@ -22,7 +22,7 @@ dependencies = [
     "ortools>=9.9",
     "redis>=5.0",
     "rq>=1.16",
-    "psycopg2-binary>=2.9",
+    "psycopg[binary]>=3.1",
 ]
 
 [tool.setuptools.packages.find]
