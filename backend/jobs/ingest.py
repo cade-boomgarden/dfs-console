@@ -47,15 +47,14 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
     ctx.update(0.05, "Resolving main slate")
     if payload.get("draft_group_id"):
         gid = int(payload["draft_group_id"])
-        slate_name = payload.get("name", f"Draft group {gid}")
+        slate_name = payload.get("name") or f"Draft group {gid}"
         start_time, game_count = None, 0
     else:
         lobby = (_load_fixture(fixture_dir, "contests_groups_only.json")
                  if fixture_dir else dk.fetch_lobby())
-        groups = dk.find_main_slate_groups(lobby)
-        if not groups:
+        g = dk.pick_current_main_slate(dk.find_main_slate_groups(lobby))
+        if not g:
             raise RuntimeError("No main-slate Classic draft group found (section 15a filter)")
-        g = groups[0]
         gid = g["DraftGroupId"]
         slate_name = f"NFL Main {g.get('StartDateEst', '')[:10]}"
         start_time = g.get("StartDate")
@@ -259,6 +258,7 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
 
     ctx.update(0.95, "Bootstrapping ownership")
     _bootstrap_ownership(db, pv.id)
+    ctx.update(1.0, f"Ingested {slate.name}: {n_pool} players, {len(games)} games")
 
     return {"slate_id": slate.id, "pool_version_id": pv.id,
             "pool_size": n_pool, "fp_unmatched": n_unmatched,

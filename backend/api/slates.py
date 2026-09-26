@@ -56,6 +56,7 @@ class IngestIn(BaseModel):
     draft_group_id: int | None = None
     season: int | None = None
     week: int | None = None
+    name: str | None = None
     label: str = "ingest"
 
 

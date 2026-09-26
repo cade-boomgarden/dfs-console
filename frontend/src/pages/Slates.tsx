@@ -29,6 +29,7 @@ export default function Slates() {
   const guess = guessSeasonWeek();
   const [season, setSeason] = useState<number>(guess.season);
   const [week, setWeek] = useState<number>(guess.week);
+  const [draftGroup, setDraftGroup] = useState("");
 
   const start = async (body: Record<string, unknown>) => {
     setError("");
@@ -58,9 +59,17 @@ export default function Slates() {
             <input type="number" min={1} max={18} className="w-20" value={week}
               onChange={(e) => setWeek(Number(e.target.value))} />
           </Field>
+          <Field label="Draft group (optional)">
+            <input type="number" className="w-28" value={draftGroup} placeholder="auto"
+              onChange={(e) => setDraftGroup(e.target.value)} />
+          </Field>
           <Btn kind="primary"
             disabled={!season || !week || week < 1 || week > 18}
-            onClick={() => start({ season, week, label: `${season} wk${week}` })}>
+            onClick={() => start({
+              season, week, label: `${season} wk${week}`,
+              ...(draftGroup ? { draft_group_id: Number(draftGroup),
+                                 name: `NFL ${season} wk${week} (DG ${draftGroup})` } : {}),
+            })}>
             Ingest live main slate
           </Btn>
           <Btn onClick={() => start({ fixture_dir: "backend/tests/fixtures", label: "fixture" })}>
@@ -71,7 +80,8 @@ export default function Slates() {
           Season and week are guessed from today's date and are worth checking —
           FantasyPros answers a wrong week with a well-formed payload for the wrong
           week, and an omitted week with season-long totals. The slate itself is
-          resolved from the DraftKings lobby; these two only select the projections.
+          resolved from the DraftKings lobby (earliest main slate not yet started);
+          these two only select the projections. Enter a draft group ID to override the lobby pick.
         </div>
         {job && job.status !== "done" && (
           <Progress value={job.progress} message={`${job.status} — ${job.message}`} />

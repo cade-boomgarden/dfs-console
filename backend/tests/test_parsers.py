@@ -145,3 +145,23 @@ def test_fixture_projections_align_with_the_draftables_fixture():
     fpx = load("fp_projections.json")
     assert fpx["season"] == "2026" and fpx["week"] == "1"
     assert int(fpx["count"]) == len(fpx["players"]) > 600
+
+
+def test_pick_current_main_slate_prefers_earliest_upcoming():
+    """DK lists future-week main slates and the lobby is not date-ordered."""
+    from datetime import datetime, timezone
+    groups = [
+        {"DraftGroupId": 8, "StartDate": "2026-11-01T18:00:00.0000000Z"},
+        {"DraftGroupId": 3, "StartDate": "2026-09-27T17:00:00.0000000Z"},
+        {"DraftGroupId": 2, "StartDate": "2026-09-20T17:00:00.0000000Z"},
+        {"DraftGroupId": 4, "StartDate": "2026-10-04T17:00:00.0000000Z"},
+    ]
+    sat = datetime(2026, 9, 26, 20, 0, tzinfo=timezone.utc)
+    assert dk.pick_current_main_slate(groups, now=sat)["DraftGroupId"] == 3
+    # a just-locked slate stays selectable inside the grace window
+    sun_after_lock = datetime(2026, 9, 27, 19, 0, tzinfo=timezone.utc)
+    assert dk.pick_current_main_slate(groups, now=sun_after_lock)["DraftGroupId"] == 3
+    # everything in the past: fall back to the latest
+    later = datetime(2027, 1, 1, tzinfo=timezone.utc)
+    assert dk.pick_current_main_slate(groups, now=later)["DraftGroupId"] == 8
+    assert dk.pick_current_main_slate([], now=sat) is None

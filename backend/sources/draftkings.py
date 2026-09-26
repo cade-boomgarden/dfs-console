@@ -5,6 +5,7 @@ All parsers are pure functions over captured payloads (golden-file tested);
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -37,6 +38,34 @@ def find_main_slate_groups(lobby_payload: dict[str, Any]) -> list[dict[str, Any]
             continue
         out.append(g)
     return out
+
+
+def _group_start(g: dict[str, Any]) -> datetime | None:
+    raw = (g.get("StartDate") or "").rstrip("Z")
+    try:
+        return datetime.fromisoformat(raw[:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def pick_current_main_slate(groups: list[dict[str, Any]],
+                            now: datetime | None = None,
+                            grace_hours: float = 6.0) -> dict[str, Any] | None:
+    """The main slate to ingest right now: the earliest one not yet started.
+
+    DK posts main slates weeks ahead (an August lobby already lists Week 1),
+    and the lobby is not in date order, so the first match is often a future
+    week. `grace_hours` keeps a just-locked slate selectable for late pulls.
+    Groups with no parseable StartDate sort last.
+    """
+    if not groups:
+        return None
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=grace_hours)
+    far = datetime.max.replace(tzinfo=timezone.utc)
+    ordered = sorted(groups, key=lambda g: _group_start(g) or far)
+    upcoming = [g for g in ordered if (_group_start(g) or far) >= cutoff]
+    return upcoming[0] if upcoming else ordered[-1]
 
 
 # --- draftables --------------------------------------------------------------
