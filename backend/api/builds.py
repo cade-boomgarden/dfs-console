@@ -13,8 +13,8 @@ from ..jobs import fieldcache, skelcache
 from ..jobs.poolutil import to_core_players
 from ..jobs.runner import enqueue
 from ..models.db import get_db
-from ..models.models import (Contest, Game, LineupRow, LineupSet, PoolPlayer,
-                             PoolVersion, User)
+from ..models.models import (Contest, ContestEntry, Game, LineupRow,
+                             LineupSet, PoolPlayer, PoolVersion, User)
 from .deps import require_pool, sims_for_pool
 
 router = APIRouter(prefix="/api/slates/{slate_id}", tags=["builds"])
@@ -151,9 +151,17 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
     for lu in lineups:
         type_counts[lu.lineup_type or "?"] = type_counts.get(lu.lineup_type or "?", 0) + 1
 
+    diagnostics = dict((ls.config_snapshot or {}).get("_diagnostics", {}))
+    edits = (ls.config_snapshot or {}).get("_edits")
+    if edits:
+        # the random baseline was drawn at the built set size; it no longer
+        # describes a hand-pared set
+        diagnostics.pop("n_eff_random_baseline", None)
+
     return {
         "id": ls.id, "kind": ls.kind, "label": ls.label, "status": ls.status,
         "n_eff": ls.n_eff, "n_eff_flag": ls.n_eff_flag,
+        "edits": edits,
         "config": ls.config_snapshot, "pool_version_id": ls.pool_version_id,
         "lineups": [{
             "id": lu.id, "ordinal": lu.ordinal, "slots": lu.slots,
@@ -164,7 +172,7 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
         } for lu in lineups],
         "exposures": exposures,
         "team_exposures": team_exposures,
-        "diagnostics": (ls.config_snapshot or {}).get("_diagnostics", {}),
+        "diagnostics": diagnostics,
         "overlap_hist": overlap_hist,
         "type_counts": type_counts,
     }
@@ -290,3 +298,76 @@ def recompute_neff(slate_id: int, set_id: int, db: Session = Depends(get_db),
     ls.n_eff = round(n_eff(scores), 1)
     db.commit()
     return {"n_eff": ls.n_eff}
+
+
+class DeleteLineupsIn(BaseModel):
+    lineup_ids: list[int]
+
+
+@router.post("/sets/{set_id}/lineups/delete")
+def delete_lineups(slate_id: int, set_id: int, body: DeleteLineupsIn,
+                   db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    """Hand-pare a set: delete lineups, renumber ordinals (export assigns
+    entries in ordinal order), unlink any exported entries that pointed at
+    them, and refresh the set's N_eff + per-lineup deltas against the
+    remaining lineups when the sims matrix is resident."""
+    from ..core.evaluator import n_eff
+    from ..jobs import simscache
+
+    ls = db.get(LineupSet, set_id)
+    if not ls or ls.user_id != user.id or ls.slate_id != slate_id:
+        raise HTTPException(404, "Lineup set not found")
+    ids = set(body.lineup_ids)
+    doomed = (db.query(LineupRow)
+              .filter(LineupRow.lineup_set_id == set_id, LineupRow.id.in_(ids))
+              .all()) if ids else []
+    if len(doomed) != len(ids):
+        raise HTTPException(404, "Some lineups are not in this set")
+    if not doomed:
+        return {"deleted": 0, "n_lineups": len(ls.lineups), "n_eff": ls.n_eff}
+
+    (db.query(ContestEntry).filter(ContestEntry.lineup_id.in_(ids))
+     .update({ContestEntry.lineup_id: None}, synchronize_session=False))
+    for lu in doomed:
+        db.delete(lu)
+    db.flush()
+
+    remaining = (db.query(LineupRow).filter_by(lineup_set_id=set_id)
+                 .order_by(LineupRow.ordinal, LineupRow.id).all())
+    for i, lu in enumerate(remaining):
+        lu.ordinal = i
+
+    # N_eff and leave-one-out deltas describe the set as a whole, so every
+    # remaining lineup's delta changes. Recompute if sims are resident;
+    # otherwise clear them rather than show numbers for a set that no
+    # longer exists.
+    cached = simscache.get(ls.pool_version_id)
+    k = len(remaining)
+    loo: dict[int, float] | None = None
+    if cached is not None and k >= 1:
+        sims, col_index = cached
+        scores = portfolio_scores(
+            [[str(s["player_id"]) for s in lu.slots if s.get("player_id")]
+             for lu in remaining], sims, col_index)
+        ls.n_eff = round(n_eff(scores), 1)
+        if 2 <= k <= 200:
+            _, contrib = allocation_neff(
+                np.cov(scores), [str(i) for i in range(k)],
+                {str(i): 1 for i in range(k)})
+            loo = {i: contrib.get(str(i), 0.0) for i in range(k)}
+    else:
+        ls.n_eff = None
+    for i, lu in enumerate(remaining):
+        if "neff_delta" in (lu.evaluation or {}) or loo is not None:
+            lu.evaluation = {**(lu.evaluation or {}),
+                             "neff_delta": round(loo[i], 3) if loo else None}
+
+    # the N_eff flag was judged against a random baseline at the built size
+    ls.n_eff_flag = False
+    snap = dict(ls.config_snapshot or {})
+    prev = snap.get("_edits") or {}
+    snap["_edits"] = {"deleted": int(prev.get("deleted", 0)) + len(doomed)}
+    ls.config_snapshot = snap
+    db.commit()
+    return {"deleted": len(doomed), "n_lineups": k, "n_eff": ls.n_eff}

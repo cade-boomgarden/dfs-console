@@ -216,3 +216,54 @@ def test_block_sweep_reports_tradeoff_curve():
         assert "portfolio_expected_payout" in r     # contest passed -> payout basis
     assert job.result["selection_basis"] == "expected_payout"
     db.close()
+
+
+def test_delete_lineups_pares_set_and_refreshes_neff():
+    """Hand-paring: deleted rows go, ordinals close up, exported entries that
+    pointed at them are unlinked, and N_eff/deltas describe the new set."""
+    import pytest
+    from fastapi import HTTPException
+
+    from backend.api.builds import DeleteLineupsIn, delete_lineups, set_detail
+    from backend.models.models import Contest, ContestEntry, LineupRow, User
+
+    db = SessionLocal()
+    ls = (db.query(LineupSet).filter_by(kind="build")
+          .order_by(LineupSet.id.desc()).first())
+    user = db.get(User, ls.user_id)
+    rows = sorted(ls.lineups, key=lambda r: r.ordinal)
+    assert len(rows) >= 4
+    before_n = len(rows)
+    doomed = [rows[0].id, rows[2].id]
+
+    contest = db.query(Contest).filter_by(slate_id=ls.slate_id).first()
+    entry = ContestEntry(contest_id=contest.id, dk_entry_id="pare-1",
+                         lineup_id=rows[0].id)
+    db.add(entry); db.commit()
+
+    # a lineup from another set is refused, and nothing is deleted
+    other = db.query(LineupRow).filter(LineupRow.lineup_set_id != ls.id).first()
+    if other is not None:
+        with pytest.raises(HTTPException):
+            delete_lineups(ls.slate_id, ls.id,
+                           DeleteLineupsIn(lineup_ids=[rows[1].id, other.id]),
+                           db=db, user=user)
+        db.rollback()
+
+    out = delete_lineups(ls.slate_id, ls.id, DeleteLineupsIn(lineup_ids=doomed),
+                         db=db, user=user)
+    assert out["deleted"] == 2 and out["n_lineups"] == before_n - 2
+    db.expire_all()
+    left = (db.query(LineupRow).filter_by(lineup_set_id=ls.id)
+            .order_by(LineupRow.ordinal).all())
+    assert [lu.ordinal for lu in left] == list(range(before_n - 2))
+    assert not {lu.id for lu in left} & set(doomed)
+    assert db.get(ContestEntry, entry.id).lineup_id is None
+    assert out["n_eff"] is not None and 1.0 <= out["n_eff"] <= before_n - 2 + 1e-6
+    assert all(lu.evaluation.get("neff_delta") is not None for lu in left)
+
+    detail = set_detail(ls.slate_id, ls.id, db=db, user=user)
+    assert detail["edits"] == {"deleted": 2}
+    assert "n_eff_random_baseline" not in detail["diagnostics"]
+    assert len(detail["lineups"]) == before_n - 2
+    db.close()

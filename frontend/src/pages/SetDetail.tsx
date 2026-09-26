@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, LineupDTO } from "../api";
-import { Badge, DistStrip, distDomain, distMaxDensity, money, num } from "../ui";
+import { Badge, Btn, DistStrip, distDomain, distMaxDensity, money, num } from "../ui";
 
 interface Exposure {
   player_id: number; name: string; position: string; team: string;
@@ -20,6 +20,7 @@ interface Detail {
   diagnostics: { n_eff_random_baseline?: number; n_candidates?: number;
                  selection_basis?: string; weight_basis?: string };
   overlap_hist: number[]; type_counts: Record<string, number>;
+  edits: { deleted: number } | null;
 }
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
@@ -45,6 +46,25 @@ export default function SetDetail() {
   const [luDesc, setLuDesc] = useState(false);
   const [luType, setLuType] = useState("ALL");
   const [luQuery, setLuQuery] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [armed, setArmed] = useState<number | "bulk" | null>(null);
+
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: (ids: number[]) =>
+      api.post<{ deleted: number; n_lineups: number; n_eff: number | null }>(
+        `/api/slates/${slateId}/sets/${setId}/lineups/delete`, { lineup_ids: ids }),
+    onSuccess: (_r, ids) => {
+      setSelected((prev) => { const n = new Set(prev); ids.forEach((i) => n.delete(i)); return n; });
+      setArmed(null);
+      qc.invalidateQueries({ queryKey: ["set", setId] });
+      qc.invalidateQueries({ queryKey: ["sets", slateId] });
+    },
+  });
+  const toggle = (id: number) => {
+    setArmed(null);
+    setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
 
   const rows = useMemo(() => {
     const list = (d.data?.exposures ?? []).filter((e) => pos === "ALL" || e.position === pos);
@@ -76,6 +96,16 @@ export default function SetDetail() {
   const baseline = s.diagnostics?.n_eff_random_baseline;
   const hasEv = s.lineups.some((lu) => lu.evaluation.expected_payout != null);
   const hasDelta = s.lineups.some((lu) => lu.evaluation.neff_delta != null);
+  const visibleIds = lineupRows.map((lu) => lu.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+  const toggleAllVisible = () => {
+    setArmed(null);
+    setSelected((prev) => {
+      const n = new Set(prev);
+      allVisibleSelected ? visibleIds.forEach((id) => n.delete(id)) : visibleIds.forEach((id) => n.add(id));
+      return n;
+    });
+  };
 
   const Th = ({ k, children, right }: { k?: SortKey; children: React.ReactNode; right?: boolean }) => (
     <th onClick={k ? () => setSort(k) : undefined}
@@ -100,6 +130,7 @@ export default function SetDetail() {
           </span>
         )}
         {s.n_eff_flag && <Badge>below your calibrated floor</Badge>}
+        {s.edits?.deleted ? <Badge>{s.edits.deleted} deleted by hand</Badge> : null}
         {s.diagnostics?.selection_basis && (
           <span className="text-[10px] text-[var(--dim)]">
             selected by {s.diagnostics.selection_basis === "expected_payout"
@@ -227,19 +258,44 @@ export default function SetDetail() {
           </select>
           <input placeholder="Contains player…" value={luQuery}
             onChange={(e) => setLuQuery(e.target.value)} className="w-52" />
+          {selected.size > 0 && (
+            armed === "bulk" ? (
+              <>
+                <Btn kind="primary" disabled={del.isPending}
+                  onClick={() => del.mutate([...selected])}>
+                  Delete {selected.size} lineup{selected.size === 1 ? "" : "s"}
+                </Btn>
+                <Btn kind="ghost" onClick={() => setArmed(null)}>Cancel</Btn>
+              </>
+            ) : (
+              <>
+                <Btn kind="danger" onClick={() => setArmed("bulk")}>Delete selected ({selected.size})</Btn>
+                <Btn kind="ghost" onClick={() => setSelected(new Set())}>Clear</Btn>
+              </>
+            )
+          )}
         </div>
+        {del.isError && (
+          <div className="px-3 py-1.5 text-[11px] border-b hairline">
+            Delete failed: {(del.error as Error).message}
+          </div>
+        )}
         <div className="overflow-auto max-h-[60vh]">
         <table className="w-full">
           <thead className="sticky top-0 bg-[var(--panel)]">
             <tr className="border-b hairline">
+              <th className="px-2 py-1.5 w-6">
+                <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible}
+                  title="Select all lineups shown" aria-label="Select all lineups shown" />
+              </th>
               {([["ordinal", "#"], [null, `Distribution ${domain ? `(${domain[0].toFixed(0)}–${domain[1].toFixed(0)})` : ""}`], ["median", "Med"],
                  ["projection", "Proj"], ["ceiling", "Ceil"], ["salary", "Sal"],
                  ["ownership", "Own"],
                  ...(hasEv ? [["ev", "EV$"], [null, "ROI"]] : []),
                  ...(hasDelta ? [["neff_delta", "ΔNeff"]] : []),
-                 [null, "Type"], [null, "Lineup"]] as
+                 [null, "Type"], [null, "Lineup"], [null, ""]] as
                  [LineupSortKey | null, string][]).map(([k, h]) => (
-                <th key={h}
+                <th key={h || "actions"}
                   onClick={k ? () => { luSort === k ? setLuDesc(!luDesc) : setLuSort(k); } : undefined}
                   className={`px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)] ${k ? "cursor-pointer select-none" : ""}`}>
                   {h}{k && luSort === k ? (luDesc ? " ↓" : " ↑") : ""}
@@ -249,7 +305,11 @@ export default function SetDetail() {
           </thead>
           <tbody>
             {lineupRows.map((lu) => (
-              <tr key={lu.id} className="border-b hairline hover:bg-[var(--raised)] align-top">
+              <tr key={lu.id} className={`border-b hairline hover:bg-[var(--raised)] align-top ${selected.has(lu.id) ? "bg-[var(--raised)]" : ""}`}>
+                <td className="px-2 py-1.5">
+                  <input type="checkbox" checked={selected.has(lu.id)} onChange={() => toggle(lu.id)}
+                    aria-label={`Select lineup ${lu.ordinal + 1}`} />
+                </td>
                 <td className="px-2 py-1.5 num text-[var(--dim)]">{lu.ordinal + 1}</td>
                 <td className="px-2 py-1.5">
                   <DistStrip histogram={lu.evaluation.histogram} edges={lu.evaluation.hist_edges}
@@ -280,6 +340,20 @@ export default function SetDetail() {
                 <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
                 <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
                   {lu.slots.map((sl) => sl.name).join(" · ")}
+                </td>
+                <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                  {armed === lu.id ? (
+                    <button disabled={del.isPending} onClick={() => del.mutate([lu.id])}
+                      className="text-[11px] font-bold text-[var(--accent)] underline">
+                      Delete?
+                    </button>
+                  ) : (
+                    <button onClick={() => setArmed(lu.id)} title="Delete this lineup"
+                      aria-label={`Delete lineup ${lu.ordinal + 1}`}
+                      className="text-[var(--mute)] hover:text-[var(--ink)] px-1">
+                      ✕
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
