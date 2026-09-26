@@ -44,3 +44,9 @@ def get(pool_version_id: int) -> tuple[np.ndarray, dict[str, int]] | None:
     with _lock:
         _cache[pool_version_id] = entry
     return entry
+
+
+def evict(pool_version_id: int) -> None:
+    """Drop the resident matrix (retention pruned its blob)."""
+    with _lock:
+        _cache.pop(pool_version_id, None)

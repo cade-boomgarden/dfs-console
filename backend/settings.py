@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""       # Slack/Discord-style webhook; empty = log only
     backup_time: str = "04:00"        # daily, local (America/Chicago)
     backup_keep: int = 14             # backups retained in the blob store
+    sims_keep: int = 4                # newest pool versions whose sims/field blobs are kept
 
     # --- first-boot bootstrap (deploy convenience) ---------------------------
     # Set both on a fresh deploy to create the first account without shell

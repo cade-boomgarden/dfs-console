@@ -9,6 +9,7 @@ S3BlobStore against Cloudflare R2 behind the same `BlobStore` protocol
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -24,9 +25,18 @@ class LocalBlobStore:
         return p
 
     def put(self, key: str, data: bytes) -> None:
+        """Atomic: write a temp file, then rename over the key. A failed
+        write (ENOSPC) leaves no truncated blob behind for a reader to trip
+        on -- `exists()` only ever sees complete files."""
         p = self._path(key)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(data)
+        tmp = p.with_name(f".{p.name}.tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, p)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     def get(self, key: str) -> bytes:
         return self._path(key).read_bytes()
@@ -44,6 +54,16 @@ class LocalBlobStore:
                 if key.startswith(prefix):
                     out.append(key)
         return sorted(out)
+
+    def usage(self) -> dict[str, int]:
+        """Bytes on disk per top-level prefix (sims/, field/, backups/...)."""
+        base = self.root.resolve()
+        out: dict[str, int] = {}
+        for p in base.rglob("*"):
+            if p.is_file():
+                top = p.relative_to(base).parts[0]
+                out[top] = out.get(top, 0) + p.stat().st_size
+        return out
 
     def delete(self, key: str) -> None:
         p = self._path(key)

@@ -106,3 +106,10 @@ def default_weights(
     tail = (ss.S > t).mean(axis=1)
     return ({st.skeleton.key: (float(tail[i]) if st.feasible else 0.0)
              for i, st in enumerate(ss.stats)}, "tail")
+
+
+def evict(pool_version_id: int) -> None:
+    with _lock:
+        _cache.pop(pool_version_id, None)
+        for k in [k for k in _payout_cache if k[0] == pool_version_id]:
+            del _payout_cache[k]

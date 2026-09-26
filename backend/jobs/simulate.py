@@ -213,6 +213,10 @@ def simulate_job(job_id: int) -> None:
             pp.stddev = round(float(c.std()), 2)
             pp.sim_col = col[str(pp.player_id)]
 
+        # make room first: the disk is small and every re-sim adds a blob
+        from .blobgc import prune_pool_blobs
+        prune_pool_blobs(db, keep=max(settings.sims_keep - 1, 0), protect={pv_id})
+        db.commit()
         key = simscache.put(pv_id, matrix, order)
         pv.sims_blob_key = key
         pv.n_sims = n_sims

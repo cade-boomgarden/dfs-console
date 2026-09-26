@@ -28,6 +28,14 @@ def run_backup(user: User = Depends(current_user)):
     return {"job_id": enqueue("backup", {"manual": True}, user.id)}
 
 
+@router.post("/prune-blobs")
+def run_prune_blobs(user: User = Depends(current_user)):
+    """Free disk now: drop sims/field blobs outside the newest `sims_keep`
+    pool versions. The result reports disk usage by prefix."""
+    from ..jobs.runner import enqueue
+    return {"job_id": enqueue("prune_blobs", {"manual": True}, user.id)}
+
+
 @router.get("")
 def list_jobs(db: Session = Depends(get_db), user: User = Depends(current_user)):
     rows = db.query(Job).order_by(Job.id.desc()).limit(50).all()

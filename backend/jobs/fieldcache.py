@@ -46,3 +46,8 @@ def get(pool_version_id: int) -> FieldDist | None:
     with _lock:
         _cache[pool_version_id] = dist
     return dist
+
+
+def evict(pool_version_id: int) -> None:
+    with _lock:
+        _cache.pop(pool_version_id, None)

@@ -43,6 +43,16 @@ def backup_job(job_id: int) -> None:
     settings = get_settings()
     store = blob_store()
 
+    # stale sims/field blobs go first, so a full disk can't block the dump
+    from ..models.db import SessionLocal
+    from .blobgc import prune_pool_blobs
+    db = SessionLocal()
+    try:
+        gc = prune_pool_blobs(db, keep=settings.sims_keep)
+        db.commit()
+    finally:
+        db.close()
+
     ctx.update(0.2, "Dumping database")
     data, ext = _dump(settings.database_url)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -57,4 +67,6 @@ def backup_job(job_id: int) -> None:
         store.delete(old)
 
     ctx.finish({"key": key, "bytes": len(data),
-                "kept": len(keys) - len(pruned), "pruned": len(pruned)})
+                "kept": len(keys) - len(pruned), "pruned": len(pruned),
+                "pool_blobs_pruned": gc["pruned_pool_versions"],
+                "disk_usage": store.usage()})
