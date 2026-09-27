@@ -71,17 +71,22 @@ def evaluate_lineup(slate_id: int, body: LineupIn, db: Session = Depends(get_db)
 
 class CompleteIn(LineupIn):
     n: int = 1     # request up to 5 distinct completions
+    fade_ids: list[int] = []   # builder-session fades: excluded from this
+                               # completion only, never persisted
 
 
 @router.post("/complete")
 def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
              user: User = Depends(current_user)):
     """Optimizer-assisted completion: lock the chosen players, solve for the
-    rest. Uses the sims-mean projections already on the pool."""
+    rest. Uses the sims-mean projections already on the pool. Pool-level
+    excludes and the request's fades both sit out; a slotted player is locked
+    and wins over either."""
     pv, players, adj = _core_pool(db, slate_id, user.id)
     locked = frozenset(str(pid) for pid in body.player_ids if pid)
-    excluded = frozenset(str(pid) for pid, a in adj.items()
-                         if a.get("exclude") and str(pid) not in locked)
+    pool_excl = {str(pid) for pid, a in adj.items() if a.get("exclude")}
+    fades = {str(pid) for pid in body.fade_ids}
+    excluded = frozenset((pool_excl | fades) - locked)
     try:
         lineups = build(players, BuildConfig(
             n_lineups=min(max(body.n, 1), 5),
@@ -89,6 +94,10 @@ def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
         ))
     except InfeasibleError as e:
         return {"lineups": [], "error": str(e)}
+    if not lineups:
+        return {"lineups": [], "error": (
+            "No valid lineup completes these slots with the current fades "
+            "and pool excludes (salary, stack, or position rules).")}
     return {"lineups": [
         [{"slot": s, "player_id": int(p.id), "name": p.name}
          for s, p in zip(lu.slots, lu.players)]

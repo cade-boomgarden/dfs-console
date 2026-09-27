@@ -267,3 +267,36 @@ def test_delete_lineups_pares_set_and_refreshes_neff():
     assert "n_eff_random_baseline" not in detail["diagnostics"]
     assert len(detail["lineups"]) == before_n - 2
     db.close()
+
+
+def test_builder_complete_respects_fades():
+    """Builder fades sit out a completion without touching pool adjustments;
+    a slotted (locked) player wins over a fade of the same id."""
+    from backend.api.builder import CompleteIn, complete
+    from backend.api.deps import require_pool
+    from backend.models.models import Slate, User
+
+    db = SessionLocal()
+    user = db.query(User).first()
+    slate = db.query(Slate).order_by(Slate.id.desc()).first()
+    pv = require_pool(db, slate.id)
+    qb = (db.query(PoolPlayer).filter_by(pool_version_id=pv.id)
+          .filter(PoolPlayer.position == "QB")
+          .order_by(PoolPlayer.projection.desc()).first())
+    slots = [qb.player_id] + [None] * 8
+
+    base = complete(slate.id, CompleteIn(player_ids=slots), db=db, user=user)
+    assert not base.get("error") and len(base["lineups"]) == 1
+    first = {s["player_id"] for s in base["lineups"][0]}
+    faded = sorted(first - {qb.player_id})
+    assert len(faded) == 8
+
+    # fade everything the optimizer picked, plus the locked QB
+    again = complete(slate.id, CompleteIn(player_ids=slots,
+                                          fade_ids=faded + [qb.player_id]),
+                     db=db, user=user)
+    assert not again.get("error") and len(again["lineups"]) == 1
+    second = {s["player_id"] for s in again["lineups"][0]}
+    assert qb.player_id in second          # lock beats fade
+    assert not second & set(faded)         # every fade sat out
+    db.close()

@@ -21,6 +21,11 @@ export default function Builder() {
   const [issues, setIssues] = useState<string[]>([]);
   const [ev, setEv] = useState<Evaluation | null>(null);
   const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  // Fades: players the optimizer must skip when completing. Builder-session
+  // only; they survive Clear so you can hand-build several lineups against
+  // the same fade list. Pool-page excludes still apply on top.
+  const [fades, setFades] = useState<Set<number>>(new Set());
   const timer = useRef<number>();
 
   const byId = useMemo(() => {
@@ -67,14 +72,33 @@ export default function Builder() {
     const empty = next.findIndex((s) => s === null);
     if (empty >= 0) setActive(empty);
     setQ("");
+    // picking a player by hand overrides a fade on them
+    if (fades.has(id)) toggleFade(id);
+  };
+
+  const toggleFade = (id: number) => setFades((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  // fade a slotted player: open the slot and keep the optimizer off them
+  const fadeSlot = (i: number) => {
+    const id = slots[i];
+    if (id === null) return;
+    const n = [...slots]; n[i] = null; setSlots(n); setActive(i);
+    setFades((prev) => new Set(prev).add(id));
   };
 
   const complete = async () => {
     setBusy("Completing…");
-    const r = await api.post<{ lineups: { slot: string; player_id: number }[][] }>(
-      `/api/slates/${slateId}/builder/complete`, { player_ids: slots, n: 1 });
+    setError("");
+    const r = await api.post<{ lineups: { slot: string; player_id: number }[][]; error?: string }>(
+      `/api/slates/${slateId}/builder/complete`,
+      { player_ids: slots, n: 1, fade_ids: [...fades] });
     setBusy("");
     if (r.lineups.length) setSlots(r.lineups[0].map((s) => s.player_id));
+    else setError(r.error ?? "No completion found.");
   };
 
   const save = async (isDraft: boolean) => {
@@ -99,7 +123,10 @@ export default function Builder() {
                 <>
                   <span className="flex-1 truncate">{p.name}</span>
                   <span className="num text-[var(--dim)]">{money(p.salary)}</span>
-                  <span className="text-[var(--dim)] cursor-pointer px-1"
+                  <span title="Fade: remove and keep the optimizer off this player"
+                    className="text-[10px] uppercase tracking-wider text-[var(--dim)] hover:text-[var(--ink)] cursor-pointer px-1"
+                    onClick={(e) => { e.stopPropagation(); fadeSlot(i); }}>Fade</span>
+                  <span title="Remove" className="text-[var(--dim)] cursor-pointer px-1"
                     onClick={(e) => { e.stopPropagation(); const n = [...slots]; n[i] = null; setSlots(n); setActive(i); }}>✕</span>
                 </>
               ) : <span className="text-[var(--dim)]">—</span>}
@@ -129,6 +156,29 @@ export default function Builder() {
           <Btn onClick={() => save(true)} kind="ghost" disabled={picked.length === 0 || !!busy}>Save draft</Btn>
         </div>
         {busy && <div className="text-[11px] text-[var(--dim)]">{busy}</div>}
+        {error && <div className="text-[11px] text-[var(--down)]">{error}</div>}
+        <div className="pt-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="eyebrow">Fades ({fades.size})</span>
+            {fades.size > 0 && (
+              <button className="text-[11px] text-[var(--dim)] hover:text-[var(--ink)]"
+                onClick={() => setFades(new Set())}>Clear fades</button>
+            )}
+          </div>
+          {fades.size === 0
+            ? <div className="text-[11px] text-[var(--dim)]">Fade players from the table or a slot. The optimizer skips them.</div>
+            : (
+              <div className="flex flex-wrap gap-1">
+                {[...fades].map((id) => (
+                  <button key={id} onClick={() => toggleFade(id)} title="Unfade"
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded hairline border text-[11px] bg-[var(--panel)] hover:border-[var(--ink)]">
+                    <span className="line-through text-[var(--dim)]">{byId.get(id)?.name ?? id}</span>
+                    <span className="text-[var(--dim)]">✕</span>
+                  </button>
+                ))}
+              </div>
+            )}
+        </div>
         {issues.length > 0 && (
           <ul className="pt-2 space-y-1">
             {issues.map((i, k) => <li key={k} className="text-[11px] text-[var(--down)]">{i}</li>)}
@@ -149,16 +199,26 @@ export default function Builder() {
           <table className="w-full">
             <thead className="sticky top-0 bg-[var(--panel)]">
               <tr className="border-b hairline">
-                {["Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%"].map((h) => (
+                {["", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%"].map((h) => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {options.map((p) => (
+              {options.map((p) => {
+                const faded = fades.has(p.player_id);
+                return (
                 <tr key={p.player_id} onClick={() => pick(p.player_id)}
-                  className="border-b hairline hover:bg-[var(--raised)] cursor-pointer">
-                  <td className="px-2 py-1">{p.name}{p.status && <span className="ml-1 text-[var(--down)] text-[10px]">{p.status}</span>}</td>
+                  className={`border-b hairline hover:bg-[var(--raised)] cursor-pointer ${faded ? "[&>td:not(:first-child)]:opacity-40" : ""}`}>
+                  <td className="px-2 py-1 w-12">
+                    <button onClick={(e) => { e.stopPropagation(); toggleFade(p.player_id); }}
+                      title={faded ? "Unfade" : "Fade: the optimizer skips this player"}
+                      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border
+                        ${faded ? "border-[var(--ink)] text-[var(--ink)]" : "hairline text-[var(--dim)] hover:text-[var(--ink)]"}`}>
+                      {faded ? "Faded" : "Fade"}
+                    </button>
+                  </td>
+                  <td className={`px-2 py-1 ${faded ? "line-through" : ""}`}>{p.name}{p.status && <span className="ml-1 text-[var(--down)] text-[10px]">{p.status}</span>}</td>
                   <td className="px-2 py-1 text-[var(--dim)]">{p.position}</td>
                   <td className="px-2 py-1">{p.team}</td>
                   <td className="px-2 py-1 text-[var(--dim)]">{p.opponent}</td>
@@ -168,7 +228,8 @@ export default function Builder() {
                   <td className="px-2 py-1 text-[var(--up)]">{num(p.ceiling)}</td>
                   <td className="px-2 py-1">{num(p.ownership)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
