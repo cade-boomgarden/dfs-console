@@ -300,3 +300,45 @@ def test_builder_complete_respects_fades():
     assert qb.player_id in second          # lock beats fade
     assert not second & set(faded)         # every fade sat out
     db.close()
+
+
+def test_builder_complete_objectives():
+    """Each objective wins on its own stat: the ceiling completion has the
+    highest summed p85, the mean completion the highest summed mean, the
+    median completion the highest summed p50 (same lock, same pool)."""
+    import numpy as np
+
+    from backend.api.builder import CompleteIn, complete
+    from backend.api.deps import require_pool, sims_for_pool
+    from backend.models.models import Slate, User
+
+    db = SessionLocal()
+    user = db.query(User).first()
+    slate = db.query(Slate).order_by(Slate.id.desc()).first()
+    pv = require_pool(db, slate.id)
+    rows = {r.player_id: r for r in
+            db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()}
+    sims, col = sims_for_pool(pv.id)
+    med = np.median(sims, axis=0)
+    qb = max((r for r in rows.values() if r.position == "QB"),
+             key=lambda r: r.projection)
+    slots = [qb.player_id] + [None] * 8
+
+    got = {}
+    for obj in ("mean", "median", "ceiling"):
+        r = complete(slate.id, CompleteIn(player_ids=slots, objective=obj),
+                     db=db, user=user)
+        assert not r.get("error"), r
+        got[obj] = [s["player_id"] for s in r["lineups"][0]]
+
+    def total(ids, stat):
+        if stat == "median":
+            return sum(med[col[str(i)]] for i in ids)
+        return sum(getattr(rows[i], stat) for i in ids)
+
+    for obj, stat in (("mean", "projection"), ("median", "median"),
+                      ("ceiling", "ceiling")):
+        best = total(got[obj], stat)
+        for other in got.values():
+            assert best >= total(other, stat) - 0.05 * 9   # rounding slack
+    db.close()

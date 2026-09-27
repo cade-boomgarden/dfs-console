@@ -7,6 +7,12 @@ import { Btn, DistStrip, Field, money, num } from "../ui";
 const SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
 const SALARY_CAP = 50000;
 const signedMoney = (v: number) => (v < 0 ? `-${money(-v)}` : money(v));
+type Objective = "mean" | "median" | "ceiling";
+const OBJECTIVES: { key: Objective; label: string; hint: string }[] = [
+  { key: "mean", label: "Mean", hint: "Sum of each player's sim mean" },
+  { key: "median", label: "Median", hint: "Sum of each player's sim p50" },
+  { key: "ceiling", label: "Ceiling", hint: "Sum of each player's sim p85" },
+];
 const ELIGIBLE: Record<string, string[]> = {
   QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], DST: ["DST"], FLEX: ["RB", "WR", "TE"],
 };
@@ -26,6 +32,7 @@ export default function Builder() {
   // only; they survive Clear so you can hand-build several lineups against
   // the same fade list. Pool-page excludes still apply on top.
   const [fades, setFades] = useState<Set<number>>(new Set());
+  const [objective, setObjective] = useState<Objective>("mean");
   const timer = useRef<number>();
 
   const byId = useMemo(() => {
@@ -95,7 +102,7 @@ export default function Builder() {
     setError("");
     const r = await api.post<{ lineups: { slot: string; player_id: number }[][]; error?: string }>(
       `/api/slates/${slateId}/builder/complete`,
-      { player_ids: slots, n: 1, fade_ids: [...fades] });
+      { player_ids: slots, n: 1, fade_ids: [...fades], objective });
     setBusy("");
     if (r.lineups.length) setSlots(r.lineups[0].map((s) => s.player_id));
     else setError(r.error ?? "No completion found.");
@@ -147,7 +154,25 @@ export default function Builder() {
             {perSlot === null ? "—" : signedMoney(perSlot)}
           </span>
         </div>
-        <div className="flex gap-2 pt-2">
+        <div className="flex items-center gap-2 pt-2">
+          <span className="eyebrow">Optimize for</span>
+          <div className="flex ml-auto rounded border hairline overflow-hidden">
+            {OBJECTIVES.map((o) => {
+              const needsSims = o.key !== "mean" && !pool.data?.has_sims;
+              const on = objective === o.key;
+              return (
+                <button key={o.key} disabled={needsSims} aria-pressed={on}
+                  title={needsSims ? "Build the sims matrix first" : o.hint}
+                  onClick={() => setObjective(o.key)}
+                  className={`px-2 py-0.5 text-[11px] disabled:opacity-40
+                    ${on ? "bg-[var(--raised)] text-[var(--ink)]" : "text-[var(--dim)] hover:text-[var(--ink)]"}`}>
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="flex gap-2">
           <Btn kind="primary" onClick={complete} disabled={!!busy}>Complete with optimizer</Btn>
           <Btn onClick={() => setSlots(Array(9).fill(null))} kind="ghost">Clear</Btn>
         </div>

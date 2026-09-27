@@ -1,6 +1,10 @@
 """Hand-builder endpoints (section 12): validate, evaluate, complete."""
 from __future__ import annotations
 
+from dataclasses import replace
+from typing import Literal
+
+import numpy as np
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -73,16 +77,53 @@ class CompleteIn(LineupIn):
     n: int = 1     # request up to 5 distinct completions
     fade_ids: list[int] = []   # builder-session fades: excluded from this
                                # completion only, never persisted
+    objective: Literal["mean", "median", "ceiling"] = "mean"
+
+
+# per-player sim medians, keyed on (pool version, sims matrix identity) so a
+# re-simulate invalidates them
+_medians: dict[tuple[int, int], dict[str, float]] = {}
+
+
+def _player_medians(pv_id: int) -> dict[str, float]:
+    sims, col_index = sims_for_pool(pv_id)
+    key = (pv_id, id(sims))
+    if key not in _medians:
+        _medians.clear()
+        med = np.median(sims, axis=0)
+        _medians[key] = {pid: float(med[c]) for pid, c in col_index.items()}
+    return _medians[key]
+
+
+def _objective_values(players, pool_rows, adj, objective: str, pv_id: int):
+    """Per-player points the completion maximises. mean = sims mean (the
+    pool projection); median = sims p50; ceiling = sims p85. Pool-page
+    multiplier/delta adjustments apply to whichever stat is chosen."""
+    if objective != "mean":
+        sims_for_pool(pv_id)      # 409 when the sims matrix isn't built
+    med = _player_medians(pv_id) if objective == "median" else {}
+    raw = {str(pp.player_id): pp for pp in pool_rows}
+    out = []
+    for p in players:
+        pp = raw[p.id]
+        base = {"mean": pp.projection, "ceiling": pp.ceiling,
+                "median": med.get(p.id, pp.projection)}[objective]
+        a = adj.get(pp.player_id, {})
+        val = base * float(a.get("multiplier", 1.0)) + float(a.get("delta", 0.0))
+        out.append(replace(p, projection=round(max(val, 0.0), 2)))
+    return out
 
 
 @router.post("/complete")
 def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
              user: User = Depends(current_user)):
     """Optimizer-assisted completion: lock the chosen players, solve for the
-    rest. Uses the sims-mean projections already on the pool. Pool-level
+    rest, maximising the sum of each player's `objective` stat. Pool-level
     excludes and the request's fades both sit out; a slotted player is locked
     and wins over either."""
     pv, players, adj = _core_pool(db, slate_id, user.id)
+    pool_rows = db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()
+    players = _objective_values(players, pool_rows, adj, body.objective, pv.id)
     locked = frozenset(str(pid) for pid in body.player_ids if pid)
     pool_excl = {str(pid) for pid, a in adj.items() if a.get("exclude")}
     fades = {str(pid) for pid in body.fade_ids}
