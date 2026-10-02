@@ -342,3 +342,64 @@ def test_builder_complete_objectives():
         for other in got.values():
             assert best >= total(other, stat) - 0.05 * 9   # rounding slack
     db.close()
+
+
+def test_optimals_job_and_endpoints():
+    """Construction optimals end to end on the fixture slate: run endpoint ->
+    job -> options summary -> gzipped data. Every lineup carries the
+    construction it was solved under."""
+    import gzip
+    import json
+
+    from fastapi import HTTPException
+
+    from backend.api import optimals as api
+    from backend.api.deps import require_pool
+    from backend.jobs import optimals as optjob
+    from backend.models.models import Slate, User
+
+    db = SessionLocal()
+    user = db.query(User).first()
+    slate = db.query(Slate).order_by(Slate.id.desc()).first()
+    pv = require_pool(db, slate.id)
+    opts = api.options(slate.id, db=db, user=user)
+    starters = [q["id"] for q in opts["qbs"] if q["starter"]][:2]
+    assert starters and opts["latest"] is None
+
+    with __import__("pytest").raises(HTTPException):
+        api.run(slate.id, api.RunIn(qb_ids=starters, teammates=[1], bringbacks=[0],
+                                    dst=[False], shapes=["wobbly"]), db=db, user=user)
+
+    body = api.RunIn(qb_ids=starters, teammates=[1, 2], bringbacks=[0, 1],
+                     dst=[False], shapes=["any", "balanced"], top_x=2)
+    # enqueue in thread mode would race the test; build the job row directly
+    cfg = optjob.validate_config(body.model_dump())
+    job = Job(kind="optimals", payload={"slate_id": slate.id, "pool_version_id": pv.id,
+                                        "user_id": user.id, "config": cfg})
+    db.add(job); db.commit()
+    from backend.jobs.runner import _run
+    _run(job.id)
+    db.expire_all()
+    job = db.get(Job, job.id)
+    assert job.status == "done", job.message
+    res = job.result
+    assert res["n_constructions"] == 2 * 2 * 2 * 1 * 2
+    assert res["n_lineups"] > 0 and res["stats"]["solves"] > 0
+
+    opts = api.options(slate.id, db=db, user=user)
+    assert opts["latest"]["job_id"] == job.id
+    assert opts["latest"]["stale"] is None and opts["latest"]["available"]
+    assert api._stale(res, pv.id + 999).startswith("The player pool changed")
+
+    resp = api.data(slate.id, db=db, user=user)
+    doc = json.loads(gzip.decompress(resp.body))
+    assert len(doc["lineups"]) == res["n_lineups"]
+    for lu in doc["lineups"]:
+        assert lu["qb_id"] in {str(s) for s in starters}
+        assert lu["n_teammates"] in (1, 2) and lu["n_bringback"] in (0, 1)
+        assert not lu["dst_with_qb"]
+        assert all(i in doc["players"] for i in lu["ids"])
+        for h in lu["hits"]:
+            if h["c"].endswith("|balanced"):
+                assert lu["shape"] == "balanced"
+    db.close()

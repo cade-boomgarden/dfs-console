@@ -306,14 +306,16 @@ def _blocked_ids(
     return blocked - set(cfg.locked_ids)
 
 
-def _solve_one(
+def base_model(
     players: Sequence[Player],
     cfg: BuildConfig,
     rules: RosterRules,
-    rng: random.Random,
-    prior: Sequence[Lineup],
-    blocked: set[str],
-) -> Lineup:
+    blocked: set[str] = frozenset(),
+) -> tuple[cp_model.CpModel, list, dict[str, int]]:
+    """Every roster, salary, spread, lock, DST, ownership, stack and group
+    constraint -- no diversification cuts, no objective. Callers that solve
+    many times against one constraint set (the optimals job) build this once
+    and add cuts between solves."""
     model = cp_model.CpModel()
     idx = {p.id: n for n, p in enumerate(players)}
 
@@ -410,6 +412,19 @@ def _solve_one(
             model.Add(sum(members) >= grp.min_from)
         if grp.max_from is not None:
             model.Add(sum(members) <= grp.max_from)
+
+    return model, x, idx
+
+
+def _solve_one(
+    players: Sequence[Player],
+    cfg: BuildConfig,
+    rules: RosterRules,
+    rng: random.Random,
+    prior: Sequence[Lineup],
+    blocked: set[str],
+) -> Lineup:
+    model, x, idx = base_model(players, cfg, rules, blocked)
 
     # --- diversification --------------------------------------------------
     cap = cfg.max_overlap if cfg.max_overlap is not None else rules.size - 1

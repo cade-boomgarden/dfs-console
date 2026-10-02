@@ -8,6 +8,7 @@ import SlateOverview from "./pages/SlateOverview";
 import Pool from "./pages/Pool";
 import Builder from "./pages/Builder";
 import Builds from "./pages/Builds";
+import Optimals from "./pages/Optimals";
 import SetDetail from "./pages/SetDetail";
 import Contests from "./pages/Contests";
 import Jobs from "./pages/Jobs";
@@ -19,7 +20,7 @@ function SlateNav() {
   const { slateId } = useParams();
   const tabs = [
     ["", "Overview"], ["pool", "Pool"], ["builder", "Builder"],
-    ["builds", "Builds"], ["contests", "Contests"],
+    ["builds", "Builds"], ["optimals", "Optimals"], ["contests", "Contests"],
   ] as const;
   return (
     <nav className="flex gap-1">
@@ -73,6 +74,7 @@ function Gate() {
         <Route path="/slate/:slateId/pool" element={<Pool />} />
         <Route path="/slate/:slateId/builder" element={<Builder />} />
         <Route path="/slate/:slateId/builds" element={<Builds />} />
+        <Route path="/slate/:slateId/optimals" element={<Optimals />} />
         <Route path="/slate/:slateId/sets/:setId" element={<SetDetail />} />
         <Route path="/slate/:slateId/contests" element={<Contests />} />
         <Route path="/jobs" element={<Jobs />} />

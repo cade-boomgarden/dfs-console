@@ -1,5 +1,5 @@
 """Blob retention for per-pool-version artifacts (sims matrices, field
-distributions).
+distributions, construction optimals).
 
 The Render disk is small (1 GB) and shared with backups. Every simulate
 writes a ~55 MB sims blob plus a field blob, and every ingest makes a new
@@ -22,7 +22,7 @@ from ..settings import get_settings
 from . import fieldcache, simscache, skelcache
 from .runner import JobContext, register
 
-_PV_KEY = re.compile(r"^(sims|field)/pv(\d+)\.")
+_PV_KEY = re.compile(r"^(sims|field|optimals)/pv(\d+)\.")
 
 
 def prune_pool_blobs(db: Session, keep: int, protect: set[int] | None = None) -> dict:
@@ -40,7 +40,7 @@ def prune_pool_blobs(db: Session, keep: int, protect: set[int] | None = None) ->
     store = simscache.blob_store()
     doomed_ids: set[int] = set()
     freed = 0
-    for prefix in ("sims/", "field/"):
+    for prefix in ("sims/", "field/", "optimals/"):
         for key in store.list_keys(prefix):
             m = _PV_KEY.match(key)
             if not m:

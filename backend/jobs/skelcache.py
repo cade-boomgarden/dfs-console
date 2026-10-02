@@ -19,6 +19,7 @@ from ..core.field import expected_payout
 from ..core.skeletons import (Skeleton, SkeletonStats, enumerate_skeletons,
                               skeleton_stats)
 from ..core.solver import Player
+from . import simscache
 
 _lock = threading.Lock()
 _cache: dict[int, "SkeletonSet"] = {}
@@ -45,8 +46,7 @@ class SkeletonSet:
 
 
 def _token(sims: np.ndarray) -> tuple:
-    return (sims.shape, float(sims[0, : min(8, sims.shape[1])].sum()),
-            float(sims[-1, : min(8, sims.shape[1])].sum()))
+    return simscache.token(sims)
 
 
 def get_or_build(

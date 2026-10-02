@@ -46,6 +46,13 @@ def get(pool_version_id: int) -> tuple[np.ndarray, dict[str, int]] | None:
     return entry
 
 
+def token(sims: np.ndarray) -> tuple:
+    """Cheap fingerprint of a sims matrix: a re-simulate on the same pool
+    version changes it. Caches and stored results compare it to go stale."""
+    return (sims.shape, float(sims[0, : min(8, sims.shape[1])].sum()),
+            float(sims[-1, : min(8, sims.shape[1])].sum()))
+
+
 def evict(pool_version_id: int) -> None:
     """Drop the resident matrix (retention pruned its blob)."""
     with _lock:
