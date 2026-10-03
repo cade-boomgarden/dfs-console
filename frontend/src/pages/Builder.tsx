@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, Evaluation, PoolPlayer } from "../api";
 import { Btn, DistStrip, Field, money, num } from "../ui";
+import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
 
 const SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
 const SALARY_CAP = 50000;
@@ -21,6 +22,7 @@ export default function Builder() {
   const { slateId } = useParams();
   const pool = useQuery({ queryKey: ["pool", slateId],
     queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
+  const profiles = usePoolProfiles(slateId);
   const [slots, setSlots] = useState<(number | null)[]>(Array(9).fill(null));
   const [active, setActive] = useState(0);
   const [q, setQ] = useState("");
@@ -128,7 +130,7 @@ export default function Builder() {
               <span className="eyebrow w-9">{s}</span>
               {p ? (
                 <>
-                  <span className="flex-1 truncate">{p.name}</span>
+                  <PlayerHover player={p} profile={profiles[p.player_id]} className="flex-1 truncate">{p.name}</PlayerHover>
                   <span className="num text-[var(--dim)]">{money(p.salary)}</span>
                   <span title="Fade: remove and keep the optimizer off this player"
                     className="text-[10px] uppercase tracking-wider text-[var(--dim)] hover:text-[var(--ink)] cursor-pointer px-1"
@@ -243,7 +245,11 @@ export default function Builder() {
                       {faded ? "Faded" : "Fade"}
                     </button>
                   </td>
-                  <td className={`px-2 py-1 ${faded ? "line-through" : ""}`}>{p.name}{p.status && <span className="ml-1 text-[var(--down)] text-[10px]">{p.status}</span>}</td>
+                  <td className={`px-2 py-1 ${faded ? "line-through" : ""}`}>
+                    <PlayerHover player={p} profile={profiles[p.player_id]}>
+                      {p.name}{p.status && <span className="ml-1 text-[var(--down)] text-[10px]">{p.status}</span>}
+                    </PlayerHover>
+                  </td>
                   <td className="px-2 py-1 text-[var(--dim)]">{p.position}</td>
                   <td className="px-2 py-1">{p.team}</td>
                   <td className="px-2 py-1 text-[var(--dim)]">{p.opponent}</td>

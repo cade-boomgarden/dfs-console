@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api, SlateSummary, watchJob } from "../api";
+import { api, ProfileStatus, SlateSummary, watchJob } from "../api";
 import { Badge, Btn, Field, Progress } from "../ui";
 
 /** Best guess at the current NFL season and week.
@@ -30,6 +30,26 @@ export default function Slates() {
   const [season, setSeason] = useState<number>(guess.season);
   const [week, setWeek] = useState<number>(guess.week);
   const [draftGroup, setDraftGroup] = useState("");
+  const profiles = useQuery({ queryKey: ["profile-status"],
+    queryFn: () => api.get<ProfileStatus>("/api/profiles/status") });
+  const [profJob, setProfJob] = useState<{ progress: number; message: string; status: string } | null>(null);
+
+  const refreshProfiles = async () => {
+    setError("");
+    try {
+      const { job_id } = await api.post<{ job_id: number }>("/api/profiles/refresh", { season, week });
+      watchJob(job_id, (j) => {
+        setProfJob(j);
+        if (j.status === "failed") setError(j.message);
+        if (j.status === "done") {
+          qc.invalidateQueries({ queryKey: ["profile-status"] });
+          qc.invalidateQueries({ queryKey: ["pool-profiles"] });
+        }
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const start = async (body: Record<string, unknown>) => {
     setError("");
@@ -75,6 +95,18 @@ export default function Slates() {
           <Btn onClick={() => start({ fixture_dir: "backend/tests/fixtures", label: "fixture" })}>
             Ingest fixture slate
           </Btn>
+          <Btn disabled={!season || !week || week < 1 || week > 18 || profJob?.status === "running"}
+            onClick={refreshProfiles}>
+            Refresh player profiles
+          </Btn>
+        </div>
+        <div className="text-[11px] num text-[var(--dim)]">
+          {profiles.data?.season
+            ? <>Profiles as of <span className="text-[var(--ink)]">{profiles.data.season} wk{profiles.data.week}</span>
+                {" "}· {profiles.data.profiles.toLocaleString()} players
+                {profiles.data.updated_at && <> · updated {new Date(profiles.data.updated_at).toLocaleDateString()}</>}
+                {profiles.data.season === season && profiles.data.week === week ? "" : " · refresh for this week"}</>
+            : "No player profiles yet. Refresh to build them."}
         </div>
         <div className="text-[11px] text-[var(--dim)] max-w-2xl">
           Season and week are guessed from today's date and are worth checking —
@@ -82,9 +114,17 @@ export default function Slates() {
           week, and an omitted week with season-long totals. The slate itself is
           resolved from the DraftKings lobby (earliest main slate not yet started);
           these two only select the projections. Enter a draft group ID to override the lobby pick.
+          Refresh player profiles rebuilds usage profiles from nflverse play-by-play, using games
+          before this week, and links the pool's players to them. Run it after ingesting the week's slate.
         </div>
         {job && job.status !== "done" && (
           <Progress value={job.progress} message={`${job.status} — ${job.message}`} />
+        )}
+        {profJob && profJob.status !== "done" && profJob.status !== "failed" && (
+          <Progress value={profJob.progress} message={`profiles — ${profJob.message}`} />
+        )}
+        {profJob?.status === "done" && profJob.message && (
+          <div className="text-[11px] text-[var(--ink)]">{profJob.message}</div>
         )}
         {job?.status === "done" && job.message && (
           <div className="text-[11px] text-[var(--ink)]">{job.message}</div>

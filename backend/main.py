@@ -13,6 +13,7 @@ from .api import (auth_routes, builder, builds, contests, jobs_routes,
 # job registration side effects
 from .jobs import (backup, blobgc, field, ingest, optimals,  # noqa: F401
                    optimize, simulate)
+from .jobs import profiles as profiles_job  # noqa: F401
 from .models.db import Base, engine
 from .settings import get_settings
 

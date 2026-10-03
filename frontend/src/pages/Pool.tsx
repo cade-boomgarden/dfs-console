@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-table";
 import { api, PoolPlayer } from "../api";
 import { money, num } from "../ui";
+import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
 
 const col = createColumnHelper<PoolPlayer>();
 
@@ -15,6 +16,7 @@ export default function Pool() {
   const qc = useQueryClient();
   const pool = useQuery({ queryKey: ["pool", slateId],
     queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
+  const profiles = usePoolProfiles(slateId);
   const [pos, setPos] = useState("ALL");
   const [q, setQ] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "salary", desc: true }]);
@@ -37,10 +39,11 @@ export default function Pool() {
         onChange={(e) => setAdj(row.original.player_id, "exclude", null, e.target.checked)} />;
     }}),
     col.accessor("name", { header: "Player", cell: (c) => (
-      <span className={c.row.original.adjustments.exclude ? "line-through text-[var(--dim)]" : ""}>
+      <PlayerHover player={c.row.original} profile={profiles[c.row.original.player_id]}
+        className={`cursor-help ${c.row.original.adjustments.exclude ? "line-through text-[var(--dim)]" : ""}`}>
         {c.getValue()}
         {c.row.original.status && <span className="ml-1 text-[var(--down)] text-[10px]">{c.row.original.status}</span>}
-      </span>
+      </PlayerHover>
     )}),
     col.accessor("position", { header: "Pos" }),
     col.accessor("team", { header: "Tm" }),
@@ -68,7 +71,7 @@ export default function Pool() {
           setAdj(row.original.player_id, "multiplier", v, v !== null && v !== 1);
         }} />
     )}),
-  ], [slateId]);
+  ], [slateId, profiles]);
 
   const data = useMemo(() => (pool.data?.players ?? []).filter((p) =>
     (pos === "ALL" || p.position === pos) &&

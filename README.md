@@ -60,6 +60,9 @@ frontend/           Vite + React + TS + Tailwind; dark; tabular numerals
 
 1. **Ingest** (Slates page) — resolves the main slate (15a filter), pulls
    draftables + FP + odds, merges into an immutable pool version.
+   Then **Refresh player profiles** (same page) — downloads nflverse
+   play-by-play, rebuilds usage profiles as of that week, and links pool
+   players to them. The sims and the Pool/Builder hover cards read these.
 2. **Simulate** (Overview) — builds the sims matrix; floors/ceilings on the
    pool grid come from it.
 3. **Adjust** (Pool) — locks, fades, deltas, multipliers; persisted with

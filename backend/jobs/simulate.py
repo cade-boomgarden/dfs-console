@@ -22,10 +22,10 @@ from ..core.profiles import PlayerProfile, cold_start_features
 from ..core.sims import SimPlayer, build_sims
 from ..core.variance import StatLine
 from ..models.db import SessionLocal
-from ..models.models import (Adjustment, Game, PlayerCanonical, PoolPlayer,
-                             PoolVersion, ProfileSnapshot)
+from ..models.models import Adjustment, Game, PoolPlayer, PoolVersion
 from ..settings import get_settings
 from . import simscache
+from .poolutil import latest_profile_snapshots
 from .runner import JobContext, register
 
 # league sack rate as share of dropbacks -- converts FP QB attempts into a
@@ -94,16 +94,7 @@ def build_envs(games: list[Game], pool: list[PoolPlayer]) -> dict[str, GameEnv]:
 def load_profiles(db, pool: list[PoolPlayer]) -> tuple[dict[int, PlayerProfile], int]:
     """player_id -> profile for the pool. Latest snapshot per gsis_id, cold
     start for the rest. Returns (map, n_from_snapshot)."""
-    ids = [pp.player_id for pp in pool]
-    canon = {c.id: c for c in (db.query(PlayerCanonical)
-                               .filter(PlayerCanonical.id.in_(ids)).all())}
-    gsis_ids = [c.gsis_id for c in canon.values() if c.gsis_id]
-    snaps: dict[str, ProfileSnapshot] = {}
-    if gsis_ids:
-        for s in (db.query(ProfileSnapshot)
-                  .filter(ProfileSnapshot.gsis_id.in_(gsis_ids))
-                  .order_by(ProfileSnapshot.season, ProfileSnapshot.week).all()):
-            snaps[s.gsis_id] = s          # later (newer) rows overwrite
+    canon, snaps = latest_profile_snapshots(db, [pp.player_id for pp in pool])
 
     out: dict[int, PlayerProfile] = {}
     hits = 0

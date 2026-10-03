@@ -5,7 +5,8 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from ..core.solver import Player, Position
-from ..models.models import Adjustment, PoolPlayer, PoolVersion
+from ..models.models import (Adjustment, PlayerCanonical, PoolPlayer, PoolVersion,
+                             ProfileSnapshot)
 
 
 def current_pool_version(db: Session, slate_id: int) -> PoolVersion | None:
@@ -51,3 +52,21 @@ def locked_and_excluded(adjustments: dict[int, dict]) -> tuple[frozenset[str], f
     locked = frozenset(str(pid) for pid, a in adjustments.items() if a.get("lock"))
     excluded = frozenset(str(pid) for pid, a in adjustments.items() if a.get("exclude"))
     return locked, excluded
+
+
+def latest_profile_snapshots(
+    db: Session, player_ids: list[int],
+) -> tuple[dict[int, PlayerCanonical], dict[str, ProfileSnapshot]]:
+    """(player_id -> canonical row, gsis_id -> newest ProfileSnapshot).
+    Newest is by as-of (season, week) across every imported artifact, so a
+    player missing from the latest refresh keeps his previous snapshot."""
+    canon = {c.id: c for c in (db.query(PlayerCanonical)
+                               .filter(PlayerCanonical.id.in_(player_ids)).all())}
+    gsis_ids = [c.gsis_id for c in canon.values() if c.gsis_id]
+    snaps: dict[str, ProfileSnapshot] = {}
+    if gsis_ids:
+        for s in (db.query(ProfileSnapshot)
+                  .filter(ProfileSnapshot.gsis_id.in_(gsis_ids))
+                  .order_by(ProfileSnapshot.season, ProfileSnapshot.week).all()):
+            snaps[s.gsis_id] = s          # later (newer) rows overwrite
+    return canon, snaps

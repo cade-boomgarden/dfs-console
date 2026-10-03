@@ -27,6 +27,14 @@ export interface PoolPlayer {
   ownership: number; implied_opp_total: number | null; value: number;
   adjustments: Record<string, number | boolean>;
 }
+export interface ProfileFeature { value: number; pct: number | null; n: number | null }
+export interface PlayerProfile {
+  season: number; week: number; label: string; games: number;
+  features: Record<string, ProfileFeature>;
+}
+export interface ProfileStatus {
+  season: number | null; week: number | null; profiles: number; updated_at: string | null;
+}
 export interface SlateSummary {
   id: number; name: string; draft_group_id: number; season: number | null;
   week: number | null; start_time: string | null; game_count: number;
