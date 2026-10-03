@@ -1,4 +1,4 @@
-"""Pull scheduler + backups (sections 11e / 15g)."""
+"""Backup scheduler (section 15g); data pulls are on demand only."""
 import os
 import tempfile
 from datetime import datetime
@@ -25,33 +25,27 @@ def _at(base, h, m):
 
 
 def test_due_slots_windows():
-    assert "Sun 10:30" in due_slots(_at(SUN, 10, 35))
-    assert "Sun 10:30" in due_slots(_at(SUN, 10, 30))
-    assert due_slots(_at(SUN, 10, 29)) == []                  # not yet
-    assert "Sun 10:30" not in due_slots(_at(SUN, 10, 46))     # window passed
-    assert "Wed 12:00" in due_slots(_at(WED, 12, 5))
-    assert "Wed 12:00" not in due_slots(_at(SUN, 12, 5))      # wrong day
+    # pulls are on demand only: no pull slot ever comes due
+    for base in (SUN, WED):
+        for h, m in ((6, 0), (8, 0), (10, 30), (10, 35), (11, 15), (12, 5), (17, 0), (21, 0)):
+            assert due_slots(_at(base, h, m), backup_time="04:00") == []
     assert "backup" in due_slots(_at(WED, 4, 10), backup_time="04:00")
     assert "backup" not in due_slots(_at(WED, 5, 10), backup_time="04:00")
     assert FIRE_WINDOW.total_seconds() == 15 * 60
 
 
-def test_tick_fires_once_and_dedupes(monkeypatch):
+def test_tick_never_enqueues_ingest(monkeypatch):
     calls = []
     monkeypatch.setattr("backend.jobs.runner.enqueue",
                         lambda kind, payload, user_id=None:
                         calls.append((kind, payload)) or 990001 + len(calls))
-    now = _at(WED, 12, 3)
-    fired = tick(now)
-    assert fired == ["Wed 12:00"]
-    assert calls == [("ingest", {"scheduled_slot": "Wed 12:00"})]
-    # same minute, later tick, restarted process -- all deduped by the DB row
-    assert tick(now) == []
-    assert tick(_at(WED, 12, 9)) == []
-    assert len(calls) == 1
+    for h, m in ((10, 30), (10, 50), (12, 3)):
+        assert tick(_at(SUN, h, m)) == []
+        assert tick(_at(WED, h, m)) == []
+    assert calls == []
 
 
-def test_backup_slot_enqueues_backup(monkeypatch):
+def test_backup_slot_enqueues_backup_once(monkeypatch):
     calls = []
     monkeypatch.setattr("backend.jobs.runner.enqueue",
                         lambda kind, payload, user_id=None:
@@ -59,35 +53,9 @@ def test_backup_slot_enqueues_backup(monkeypatch):
     fired = tick(_at(WED, 4, 2))     # default backup_time 04:00
     assert fired == ["backup"]
     assert calls[0][0] == "backup"
-
-
-def test_watchdog_alerts_when_1030_pull_missing(monkeypatch):
-    alerts = []
-    monkeypatch.setattr("backend.alerts.send_alert", lambda t: alerts.append(t) or True)
-    monkeypatch.setattr("backend.jobs.runner.enqueue",
-                        lambda *a, **k: 990201)
-    # 10:50, no "Sun 10:30" run row for this date -> alert, once
-    fired = tick(_at(SUN, 10, 50))
-    assert "watchdog" in fired
-    assert len(alerts) == 1 and "post-inactives" in alerts[0]
-    assert tick(_at(SUN, 10, 52)) == []       # deduped
-    assert len(alerts) == 1
-
-
-def test_watchdog_quiet_when_pull_succeeded(monkeypatch):
-    from backend.models.models import Job, ScheduledRun
-    alerts = []
-    monkeypatch.setattr("backend.alerts.send_alert", lambda t: alerts.append(t) or True)
-    monkeypatch.setattr("backend.jobs.runner.enqueue", lambda *a, **k: 990301)
-    sun2 = datetime(2026, 9, 20, tzinfo=CHI)  # the following Sunday
-    db = SessionLocal()
-    job = Job(kind="ingest", status="done", payload={"scheduled_slot": "Sun 10:30"})
-    db.add(job); db.commit()
-    db.add(ScheduledRun(slot="Sun 10:30", run_date=sun2.strftime("%Y-%m-%d"),
-                        job_id=job.id))
-    db.commit(); db.close()
-    assert tick(_at(sun2, 10, 50)) == []
-    assert alerts == []
+    # later tick, restarted process -- deduped by the DB row
+    assert tick(_at(WED, 4, 9)) == []
+    assert len(calls) == 1
 
 
 def test_backup_job_writes_and_prunes():

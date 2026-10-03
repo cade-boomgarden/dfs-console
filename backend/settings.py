@@ -35,8 +35,8 @@ class Settings(BaseSettings):
     # --- environment ---------------------------------------------------------
     env: str = "dev"
 
-    # --- scheduler + alerting + backups (section 11e / 15g) ------------------
-    scheduler_enabled: bool = False   # DFS_SCHEDULER_ENABLED=1 on Render, in-season
+    # --- scheduler + alerting + backups (section 15g) -------------------------
+    scheduler_enabled: bool = False   # DFS_SCHEDULER_ENABLED=1 runs the daily backup; pulls are on demand
     alert_webhook_url: str = ""       # Slack/Discord-style webhook; empty = log only
     backup_time: str = "04:00"        # daily, local (America/Chicago)
     backup_keep: int = 14             # backups retained in the blob store

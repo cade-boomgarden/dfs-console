@@ -11,3 +11,9 @@ frontend/dist/
 data/odds/raw/
 data/*.parquet
 data/contest-standings-*.csv
+
+_to_delete/
+data/
+*.egg-info/
+.fuse_hidden*
+*.tar.gz

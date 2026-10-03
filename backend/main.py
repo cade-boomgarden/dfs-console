@@ -42,10 +42,10 @@ def startup() -> None:
     Base.metadata.create_all(engine)
     _bootstrap_user()
     if settings.scheduler_enabled:
-        # section 11e, finally wired: the ten weekly pulls + daily backup.
+        # daily backup only (15g). Data pulls are on demand from the UI.
         # Lives in the API process (single web service; thread job mode).
-        from .scheduler import PullScheduler
-        app.state.scheduler = PullScheduler()
+        from .scheduler import BackupScheduler
+        app.state.scheduler = BackupScheduler()
         app.state.scheduler.start()
 
 

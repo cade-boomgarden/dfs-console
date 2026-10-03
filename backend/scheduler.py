@@ -1,61 +1,35 @@
-"""The weekly pull scheduler (section 11e). Times are user-local
-(America/Chicago) by design -- stored as intended local time + zone so DST
-does not shift them.
+"""Background scheduler (section 15g). Runs the daily database backup only.
 
-Now actually wired (pre-season 2026): a daemon thread in the API process
-(started from main.py when DFS_SCHEDULER_ENABLED is set) ticks once a minute,
-fires any slot whose local time arrived in the last FIRE_WINDOW, and enqueues
-the ingest through the normal job path. Idempotency is a DB unique constraint
-(ScheduledRun), not in-memory state, so restarts and process races cannot
-double-pull. The Sunday 10:30 post-inactives pull -- the highest-value pull of
-the week -- gets a watchdog: if it has not SUCCEEDED by 10:45, an alert fires.
+Data pulls are on-demand only (2026-10-02). The ten weekly scheduled pulls
+from section 11e were removed: a pull landing mid-session interrupted hand
+builds, and manual ingest from the UI covers the need. To bring scheduled
+pulls back, restore them from git history (commit before this change).
 
-Off-season note: DK's lobby has no main-slate Classic group, so scheduled
-ingests fail (loudly, by design). Flip DFS_SCHEDULER_ENABLED off between
-seasons rather than teaching the scheduler the NFL calendar.
+A daemon thread in the API process (started from main.py when
+DFS_SCHEDULER_ENABLED is set) ticks once a minute and enqueues the backup
+through the normal job path when its local time arrives. Idempotency is a DB
+unique constraint (ScheduledRun), not in-memory state, so restarts and
+process races cannot double-run.
 """
 from __future__ import annotations
 
 import logging
 import threading
-import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
 
-PULL_SCHEDULE = [
-    ("Wed", "12:00"), ("Thu", "12:00"), ("Fri", "12:00"),
-    ("Sat", "12:00"), ("Sat", "17:00"), ("Sat", "21:00"),
-    ("Sun", "06:00"), ("Sun", "08:00"),
-    ("Sun", "10:30"),   # post-inactives -- highest-value pull; alert on failure
-    ("Sun", "11:15"),
-]
 TIMEZONE = "America/Chicago"
 FIRE_WINDOW = timedelta(minutes=15)   # a slot older than this is missed, not fired
-WATCHDOG_SLOT = ("Sun", "10:30")
-WATCHDOG_AT = "10:45"                 # if the 10:30 pull hasn't succeeded by now, alert
 
 log = logging.getLogger("dfs.scheduler")
 
 
-def _slot_dt(day: str, hhmm: str, now_local: datetime) -> datetime | None:
-    """The slot's datetime on now_local's date, or None if today isn't its day."""
-    if now_local.strftime("%a") != day:
-        return None
-    h, m = hhmm.split(":")
-    return now_local.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-
-
 def due_slots(now_local: datetime, backup_time: str | None = None) -> list[str]:
     """Slot keys whose scheduled time falls inside [now - FIRE_WINDOW, now].
-    Pure -- the thread supplies the clock, tests supply theirs. The backup slot
-    is daily; pull slots are day-of-week bound."""
+    Pure -- the thread supplies the clock, tests supply theirs."""
     due = []
-    for day, hhmm in PULL_SCHEDULE:
-        dt = _slot_dt(day, hhmm, now_local)
-        if dt is not None and timedelta(0) <= now_local - dt < FIRE_WINDOW:
-            due.append(f"{day} {hhmm}")
     if backup_time:
         h, m = backup_time.split(":")
         bdt = now_local.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
@@ -78,10 +52,9 @@ def _claim(db, slot: str, run_date: str, job_id: int | None = None) -> bool:
 
 def tick(now_local: datetime) -> list[str]:
     """One scheduler pass. Returns the slot keys fired (for tests/logging)."""
-    from .alerts import send_alert
     from .jobs.runner import enqueue
     from .models.db import SessionLocal
-    from .models.models import Job, ScheduledRun
+    from .models.models import ScheduledRun
     from .settings import get_settings
 
     settings = get_settings()
@@ -92,10 +65,7 @@ def tick(now_local: datetime) -> list[str]:
         for slot in due_slots(now_local, backup_time=settings.backup_time):
             if not _claim(db, slot, run_date):
                 continue
-            if slot == "backup":
-                job_id = enqueue("backup", {"scheduled_slot": slot})
-            else:
-                job_id = enqueue("ingest", {"scheduled_slot": slot})
+            job_id = enqueue("backup", {"scheduled_slot": slot})
             row = (db.query(ScheduledRun)
                    .filter_by(slot=slot, run_date=run_date).first())
             if row:
@@ -103,31 +73,12 @@ def tick(now_local: datetime) -> list[str]:
                 db.commit()
             fired.append(slot)
             log.info("fired %s -> job %s", slot, job_id)
-
-        # --- watchdog on the post-inactives pull (11e) -----------------------
-        wd_dt = _slot_dt(*WATCHDOG_SLOT, now_local=now_local)
-        if wd_dt is not None:
-            wd_at = _slot_dt(WATCHDOG_SLOT[0], WATCHDOG_AT, now_local)
-            if wd_at is not None and wd_at <= now_local < wd_at + FIRE_WINDOW:
-                slot_key = f"{WATCHDOG_SLOT[0]} {WATCHDOG_SLOT[1]}"
-                run = (db.query(ScheduledRun)
-                       .filter_by(slot=slot_key, run_date=run_date).first())
-                job = db.get(Job, run.job_id) if run and run.job_id else None
-                healthy = bool(job and job.status == "done")
-                if not healthy and _claim(db, "watchdog " + slot_key, run_date):
-                    state = (job.status if job
-                             else "never fired" if run is None else "no job")
-                    send_alert(
-                        f"WATCHDOG: the Sunday {WATCHDOG_SLOT[1]} post-inactives "
-                        f"pull is not done by {WATCHDOG_AT} ({state}). The pool "
-                        f"may be missing inactives -- check before building.")
-                    fired.append("watchdog")
     finally:
         db.close()
     return fired
 
 
-class PullScheduler(threading.Thread):
+class BackupScheduler(threading.Thread):
     """Minute-tick daemon. Crashing the app from the scheduler is forbidden --
     every tick is fully caught."""
 
@@ -137,8 +88,8 @@ class PullScheduler(threading.Thread):
         self._stop = threading.Event()
 
     def run(self) -> None:
-        log.info("pull scheduler running (%s, %d slots + daily backup)",
-                 TIMEZONE, len(PULL_SCHEDULE))
+        log.info("backup scheduler running (%s, daily backup only; pulls are on demand)",
+                 TIMEZONE)
         while not self._stop.is_set():
             try:
                 tick(datetime.now(ZoneInfo(TIMEZONE)))

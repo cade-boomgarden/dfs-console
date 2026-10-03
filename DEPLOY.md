@@ -138,18 +138,15 @@ makes the UI sluggish:
 
 Do not skip ahead to this. The single service is the correct starting shape.
 
-## Scheduled pulls
+## Data pulls
 
-`backend/scheduler.py` holds `PULL_SCHEDULE` — ten weekly pulls in
-America/Chicago, of which the Sunday 10:30am inactives pull is the highest-value
-one of the week. Render cron jobs are `type: cron` services in `render.yaml`
-with a `schedule` expression; they run the container, exit, and bill for the
-seconds used. **Cron schedules are UTC**, so the Central times have to be
-converted and will drift an hour at DST — which is exactly the failure §15b
-warns about. Wire these up only with an alert on failure attached; a silently
-missed inactives pull produces a bad slate rather than an error.
+Data pulls run on demand only. Trigger an ingest from the UI when you want
+fresh data. There are no scheduled pulls: a pull landing mid-session
+interrupted hand builds.
 
-Manual ingest from the UI is fine until then.
+`DFS_SCHEDULER_ENABLED=1` now runs only the daily database backup
+(`backup_time`, default 04:00 America/Chicago). Leave it on in production so
+backups keep running.
 
 ## Docker Compose (local, optional)
 
