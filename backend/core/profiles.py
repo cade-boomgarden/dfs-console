@@ -289,6 +289,28 @@ def compute_profile(
     return prof
 
 
+def season_to_date(games: list[UsageGame], position: str
+                   ) -> tuple[dict[str, float], dict[str, float]]:
+    """Plain season-to-date ratios for display (the hover card): sum(num) /
+    sum(den) over `games`, no recency weighting, no shrinkage. The sims keep
+    using `compute_profile`. Returns (features, opportunities); a feature
+    with no opportunities is left out rather than reported as 0."""
+    feats: dict[str, float] = {}
+    opps: dict[str, float] = {}
+    for spec in FEATURES:
+        if position not in spec.positions:
+            continue
+        den = sum(_usage_value(g, spec.den) for g in games)
+        if den <= 0:
+            continue
+        feats[spec.name] = sum(_usage_value(g, spec.num) for g in games) / den
+        opps[spec.name] = den
+    if position in ("WR", "TE", "RB") and "target_share" in feats:
+        feats["wopr"] = (1.5 * feats["target_share"]
+                         + 0.7 * feats.get("air_yards_share", 0.0))
+    return feats, opps
+
+
 # --------------------------------------------------------------------------
 # Cold start (14f)
 # --------------------------------------------------------------------------

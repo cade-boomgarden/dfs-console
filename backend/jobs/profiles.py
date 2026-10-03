@@ -45,6 +45,7 @@ def store_artifact(db: Session, artifact: dict) -> dict:
             team=p.get("team", ""), features=p.get("features", {}),
             opportunities=p.get("opportunities", {}),
             games=int(p.get("games", 0)), label=p.get("label", ""),
+            season_stats=p.get("season_stats"),
         ))
 
     draft = artifact.get("draft_capital", {})

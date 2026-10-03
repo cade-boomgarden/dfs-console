@@ -26,13 +26,22 @@ class NullCtx(JobContext):
         pass
 
 
-def _artifact(week: int, wrs: list[tuple[str, float]], games: int = 10) -> dict:
+def _artifact(week: int, wrs: list[tuple[str, float]], games: int = 3,
+              season_stats: bool = True) -> dict:
+    """WR profiles whose season-to-date target share is `ts`; the
+    recency-weighted feature is ts/2 so a test can tell which one the card
+    reads."""
     return {
         "meta": {"season": 2026, "week": week},
         "profiles": [{"gsis_id": g, "name": g, "position": "WR", "team": "X",
-                      "features": {"target_share": ts},
+                      "features": {"target_share": ts / 2},
                       "opportunities": {"target_share": 120.0},
-                      "games": games, "label": "Primary"} for g, ts in wrs],
+                      "games": 24, "label": "Primary",
+                      **({"season_stats": {
+                          "games": games,
+                          "features": {"target_share": ts},
+                          "opportunities": {"target_share": 30.0}}}
+                         if season_stats else {})} for g, ts in wrs],
     }
 
 
@@ -45,7 +54,7 @@ def test_store_artifact_replaces_same_week():
     store_artifact(db, _artifact(2, [("A", 0.1), ("B", 0.2)]))
     store_artifact(db, _artifact(2, [("A", 0.3)]))
     rows = db.query(ProfileSnapshot).filter_by(season=2026, week=2).all()
-    assert [(r.gsis_id, r.features["target_share"]) for r in rows] == [("A", 0.3)]
+    assert [(r.gsis_id, r.season_stats["features"]["target_share"]) for r in rows] == [("A", 0.3)]
     db.close()
 
 
@@ -64,20 +73,47 @@ def test_pool_profiles_newest_snapshot_and_percentile():
     store_artifact(db, _artifact(3, [("G-TOP", 0.05)]))
     field = [(f"F{i}", 0.10 + 0.01 * i) for i in range(10)]        # 0.10 .. 0.19
     store_artifact(db, _artifact(4, field + [("G-TOP", 0.30)]))
-    # a thin-sample player is shown but does not set the percentile scale
-    store_artifact(db, _artifact(5, [("G-2ND", 0.50)], games=2))
+    # week 5: a one-game player is shown but sits below the half-of-max
+    # games threshold (3 games -> 2), so he does not set the scale
+    wk5 = _artifact(5, field)
+    wk5["profiles"] += _artifact(5, [("G-2ND", 0.50)], games=1)["profiles"]
+    store_artifact(db, wk5)
 
     out = get_pool_profiles(pv.slate_id, db, None)["players"]
     card = out[top.player_id]
-    assert (card["season"], card["week"]) == (2026, 4)
+    assert (card["season"], card["week"], card["games"]) == (2026, 4, 3)
     ts = card["features"]["target_share"]
-    assert ts["value"] == 0.3 and ts["n"] == 120.0
+    assert ts["value"] == 0.3 and ts["n"] == 30.0     # season stats, not EW
     assert ts["pct"] == 95                    # top of 11 by mid-rank
-    # week 5 holds only one sub-threshold player: no scale, no percentile
-    assert out[second.player_id]["features"]["target_share"]["pct"] is None
+    second_card = out[second.player_id]
+    assert second_card["min_games"] == 2 and second_card["games"] == 1
+    assert second_card["features"]["target_share"]["pct"] == 100
     # nobody else in the pool has a gsis id -> absent, not cold-start noise
     assert set(out) == {top.player_id, second.player_id}
     db.close()
+
+
+def test_snapshot_without_season_stats_has_null_features():
+    db = SessionLocal()
+    pv = db.query(PoolVersion).filter_by(is_current=True).order_by(PoolVersion.id.desc()).first()
+    store_artifact(db, _artifact(6, [("G-TOP", 0.2)], season_stats=False))
+    top = next(c for c in db.query(PlayerCanonical).filter_by(gsis_id="G-TOP"))
+    card = get_pool_profiles(pv.slate_id, db, None)["players"][top.id]
+    assert card["week"] == 6 and card["features"] is None
+    db.close()
+
+
+def test_season_to_date_is_unweighted_ratio_of_sums():
+    from backend.core.profiles import UsageGame, season_to_date
+    g1 = UsageGame(season=2026, week=1, targets=10, team_targets=40,
+                   rec_air_yards=100, team_air_yards=400, snaps=50, team_snaps=60)
+    g2 = UsageGame(season=2026, week=2, targets=2, team_targets=40,
+                   rec_air_yards=0, team_air_yards=300, snaps=10, team_snaps=60)
+    feats, opps = season_to_date([g1, g2], "WR")
+    assert feats["target_share"] == 12 / 80 and opps["target_share"] == 80
+    assert abs(feats["wopr"] - (1.5 * 12 / 80 + 0.7 * 100 / 700)) < 1e-12
+    assert "ypr" not in feats                 # no receptions -> left out, not 0
+    assert season_to_date([], "WR") == ({}, {})
 
 
 def test_link_gsis_from_fantasypros_ids():

@@ -28,9 +28,12 @@ export interface PoolPlayer {
   adjustments: Record<string, number | boolean>;
 }
 export interface ProfileFeature { value: number; pct: number | null; n: number | null }
+/** Hover-card stats: this season to date, unweighted. `features` is null
+ *  for a snapshot imported before season stats existed. */
 export interface PlayerProfile {
   season: number; week: number; label: string; games: number;
-  features: Record<string, ProfileFeature>;
+  min_games: number | null;
+  features: Record<string, ProfileFeature> | null;
 }
 export interface ProfileStatus {
   season: number | null; week: number | null; profiles: number; updated_at: string | null;

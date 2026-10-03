@@ -67,7 +67,8 @@ function fmt(v: number, f: Fmt): string {
 }
 
 function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile }) {
-  const rows = (ROWS[player.position] ?? []).filter(([k]) => profile?.features[k]);
+  const feats = profile?.features ?? null;
+  const rows = (ROWS[player.position] ?? []).filter(([k]) => feats?.[k]);
   return (
     <div className="panel shadow-2xl shadow-black/60 w-[340px] p-3 space-y-2 text-xs">
       <div>
@@ -79,15 +80,27 @@ function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile
             </span>
           )}
         </div>
-        <div className="text-[var(--dim)] num text-[11px] whitespace-nowrap">
+        <div className="text-[var(--dim)] num text-[11px]">
           {player.position} · {player.team} v {player.opponent}
-          {profile && <> · {profile.season} wk{profile.week} · last {profile.games} games</>}
         </div>
+        {profile?.features && profile.week > 1 && (
+          <div className="text-[var(--dim)] num text-[11px]">
+            {profile.season} season · {profile.games} {profile.games === 1 ? "game" : "games"} thru wk{profile.week - 1}
+          </div>
+        )}
       </div>
 
       {!profile ? (
         <div className="text-[var(--dim)] text-[11px]">
           No usage profile. Rookie or no recent NFL snaps; the sim uses a projection-based cold start.
+        </div>
+      ) : !feats ? (
+        <div className="text-[var(--dim)] text-[11px]">
+          No season stats yet. On the Slates page, click Refresh player profiles.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-[var(--dim)] text-[11px]">
+          No {profile.season} games before wk{profile.week}.
         </div>
       ) : (
         <>
@@ -101,9 +114,9 @@ function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile
             </thead>
             <tbody>
               {rows.map(([k, label, f]) => {
-                const feat = profile.features[k];
+                const feat = feats[k];
                 return (
-                  <tr key={k} title={feat.n !== null ? `Recency-weighted sample: ${Math.round(feat.n).toLocaleString()}` : undefined}>
+                  <tr key={k} title={feat.n !== null ? `Sample: ${Math.round(feat.n).toLocaleString()}` : undefined}>
                     <td className="py-0.5 pr-2 text-[var(--dim)] font-[family-name:var(--font-ui)] text-[11px]">{label}</td>
                     <td className="py-0.5 text-right">{fmt(feat.value, f)}</td>
                     <td className="py-0.5 pl-3">
@@ -122,8 +135,8 @@ function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile
             </tbody>
           </table>
           <div className="text-[10px] text-[var(--mute)] leading-snug">
-            Recency-weighted (4-game half-life), shrunk toward the position average by sample size.
-            Percentile vs {player.position}s with 4+ games.
+            {profile.season} season to date, unweighted. Percentile vs {player.position}s
+            with {profile.min_games}+ {profile.min_games === 1 ? "game" : "games"} this season.
           </div>
         </>
       )}

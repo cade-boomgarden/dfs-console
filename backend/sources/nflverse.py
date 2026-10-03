@@ -22,7 +22,8 @@ from typing import Callable
 import httpx
 import polars as pl
 
-from ..core.profiles import POSITION_PRIORS, UsageGame, compute_profile
+from ..core.profiles import (POSITION_PRIORS, UsageGame, compute_profile,
+                             season_to_date)
 
 RELEASES = "https://github.com/nflverse/nflverse-data/releases/download"
 FF_PLAYERIDS = ("https://raw.githubusercontent.com/dynastyprocess/data/"
@@ -347,12 +348,20 @@ def build_artifact(usage: pl.DataFrame, coeffs: dict, season: int, week: int,
             season=season, week=week,
             games=games, priors=priors,
         )
+        cur = [g for g in games if g.season == season]
+        s_feats, s_opps = season_to_date(cur, prof.position)
         profiles.append({
             "gsis_id": prof.gsis_id, "name": prof.name,
             "position": prof.position, "team": prof.team,
             "features": {k: round(v, 5) for k, v in prof.features.items()},
             "opportunities": {k: round(v, 2) for k, v in prof.opportunities.items()},
             "games": prof.games_observed, "label": prof.label,
+            # display only (hover card): this season, unweighted, unshrunk
+            "season_stats": {
+                "games": len(cur),
+                "features": {k: round(v, 5) for k, v in s_feats.items()},
+                "opportunities": {k: round(v, 2) for k, v in s_opps.items()},
+            },
         })
 
     latest = u.select(pl.col("season").max()).item() if u.height else None

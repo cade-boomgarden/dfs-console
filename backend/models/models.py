@@ -254,6 +254,9 @@ class ProfileSnapshot(Base):
     opportunities: Mapped[dict] = mapped_column(JSON, default=dict)
     games: Mapped[int] = mapped_column(Integer, default=0)
     label: Mapped[str] = mapped_column(String(32), default="")
+    # display only: this season to date, unweighted and unshrunk
+    # ({games, features, opportunities}); the sims never read it
+    season_stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     __table_args__ = (UniqueConstraint("gsis_id", "season", "week"),)
 
