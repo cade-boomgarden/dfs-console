@@ -81,6 +81,16 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
            if fixture_dir else dk.fetch_draftables(gid))
     parsed = dk.parse_draftables(raw)
 
+    # A draft-group override skips the lobby, so the slate has no start time
+    # or game count yet. Take both from the draftables: the list sorts on
+    # start time, and an undated slate would sink to the bottom.
+    starts = sorted(g["start_time"] for g in parsed["games"] if g.get("start_time"))
+    if not slate.start_time and starts:
+        slate.start_time = starts[0]
+    if not slate.game_count and parsed["games"]:
+        slate.game_count = len(parsed["games"])
+    db.commit()
+
     comp_to_game: dict[int, Game] = {}
     for g in parsed["games"]:
         home, away = norm_team(g["home"]), norm_team(g["away"])

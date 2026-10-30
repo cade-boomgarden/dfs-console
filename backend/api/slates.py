@@ -15,7 +15,12 @@ router = APIRouter(prefix="/api/slates", tags=["slates"])
 @router.get("")
 def list_slates(db: Session = Depends(get_db), user: User = Depends(current_user)):
     out = []
-    for s in db.query(Slate).order_by(Slate.id.desc()).all():
+    # Newest slate date first. Ordering by id buried slates whose row was
+    # created early (DK posts main slates weeks ahead), so a re-ingested
+    # current week could sit below older weeks. Undated slates go last.
+    slates = sorted(db.query(Slate).all(),
+                    key=lambda s: (s.start_time or "", s.id), reverse=True)
+    for s in slates:
         pv = (db.query(PoolVersion).filter_by(slate_id=s.id, is_current=True)
               .order_by(PoolVersion.id.desc()).first())
         out.append({
