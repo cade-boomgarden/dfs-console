@@ -403,3 +403,30 @@ def test_optimals_job_and_endpoints():
             if h["c"].endswith("|balanced"):
                 assert lu["shape"] == "balanced"
     db.close()
+
+
+def test_builder_set_tracks_saves():
+    """GET /builder/set lists the saved lineups of the set saves land in;
+    each save shows up, drafts are counted but left out of the lineups."""
+    from backend.api.builder import CompleteIn, SaveIn, complete, current_set, save
+    from backend.api.deps import require_pool
+    from backend.models.models import Slate, User
+
+    db = SessionLocal()
+    user = db.query(User).first()
+    slate = db.query(Slate).order_by(Slate.id.desc()).first()
+    require_pool(db, slate.id)
+    before = current_set(slate.id, db=db, user=user)
+
+    r = complete(slate.id, CompleteIn(player_ids=[None] * 9), db=db, user=user)
+    ids = [s["player_id"] for s in r["lineups"][0]]
+    out = save(slate.id, SaveIn(player_ids=ids), db=db, user=user)
+    save(slate.id, SaveIn(player_ids=ids[:3] + [None] * 6, is_draft=True), db=db, user=user)
+    db.expire_all()
+
+    after = current_set(slate.id, db=db, user=user)
+    assert after["lineup_set_id"] == out["lineup_set_id"]
+    assert len(after["lineups"]) == len(before["lineups"]) + 1
+    assert after["n_drafts"] == before["n_drafts"] + 1
+    assert after["lineups"][-1] == ids
+    db.close()

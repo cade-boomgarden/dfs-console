@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, Evaluation, PoolPlayer } from "../api";
 import { Btn, DistStrip, Field, money, num } from "../ui";
@@ -14,6 +14,11 @@ const OBJECTIVES: { key: Objective; label: string; hint: string }[] = [
   { key: "median", label: "Median", hint: "Sum of each player's sim p50" },
   { key: "ceiling", label: "Ceiling", hint: "Sum of each player's sim p85" },
 ];
+// A 2- or 3-man group from the current slots and how many saved lineups
+// in the hand set already contain all of it.
+type Group = { slots: number[]; ids: number[]; count: number };
+const TOP_GROUPS = 5;
+
 const ELIGIBLE: Record<string, string[]> = {
   QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], DST: ["DST"], FLEX: ["RB", "WR", "TE"],
 };
@@ -23,6 +28,12 @@ export default function Builder() {
   const pool = useQuery({ queryKey: ["pool", slateId],
     queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
   const profiles = usePoolProfiles(slateId);
+  // the hand set Builder saves land in; refetched after every save
+  const qc = useQueryClient();
+  const handSet = useQuery({ queryKey: ["builder-set", slateId],
+    queryFn: () => api.get<{ lineup_set_id: number | null; label: string; n_drafts: number; lineups: number[][] }>(
+      `/api/slates/${slateId}/builder/set`) });
+  const [hoverGroup, setHoverGroup] = useState<number[] | null>(null);
   const [slots, setSlots] = useState<(number | null)[]>(Array(9).fill(null));
   const [active, setActive] = useState(0);
   const [q, setQ] = useState("");
@@ -42,6 +53,41 @@ export default function Builder() {
     pool.data?.players.forEach((p) => m.set(p.player_id, p));
     return m;
   }, [pool.data]);
+
+  const saved = useMemo(() => handSet.data?.lineups ?? [], [handSet.data]);
+  useEffect(() => setHoverGroup(null), [slots]);   // hovered row may vanish
+  const nSaved = saved.length;
+  const expCount = useMemo(() => {
+    const m = new Map<number, number>();
+    saved.forEach((lu) => lu.forEach((id) => m.set(id, (m.get(id) ?? 0) + 1)));
+    return m;
+  }, [saved]);
+  const expPct = (id: number) => (nSaved ? ((expCount.get(id) ?? 0) / nSaved) * 100 : null);
+
+  // every pair and triple among the filled slots, counted against saved lineups
+  const groups = useMemo(() => {
+    const sets = saved.map((lu) => new Set(lu));
+    const filled = slots.flatMap((id, i) => (id === null ? [] : [[i, id] as const]));
+    const count = (ids: number[]) => sets.reduce((a, s) => a + (ids.every((i) => s.has(i)) ? 1 : 0), 0);
+    const out: Group[] = [];
+    const add = (members: (readonly [number, number])[]) => {
+      const ids = members.map(([, id]) => id);
+      const c = count(ids);
+      if (c > 0) out.push({ slots: members.map(([i]) => i), ids, count: c });
+    };
+    for (let a = 0; a < filled.length; a++)
+      for (let b = a + 1; b < filled.length; b++) {
+        add([filled[a], filled[b]]);
+        for (let c = b + 1; c < filled.length; c++) add([filled[a], filled[b], filled[c]]);
+      }
+    out.sort((x, y) => y.count - x.count);
+    return {
+      triples: out.filter((g) => g.ids.length === 3).slice(0, TOP_GROUPS),
+      pairs: out.filter((g) => g.ids.length === 2).slice(0, TOP_GROUPS),
+    };
+  }, [saved, slots]);
+  // hovering a group shows its slots; otherwise the most repeated triple
+  const highlighted = new Set(hoverGroup ?? groups.triples[0]?.slots ?? []);
 
   const picked = slots.filter((s): s is number => s !== null);
   const salary = picked.reduce((a, id) => a + (byId.get(id)?.salary ?? 0), 0);
@@ -113,6 +159,7 @@ export default function Builder() {
   const save = async (isDraft: boolean) => {
     setBusy("Saving…");
     await api.post(`/api/slates/${slateId}/builder/save`, { player_ids: slots, is_draft: isDraft });
+    await qc.invalidateQueries({ queryKey: ["builder-set", slateId] });
     setBusy("");
   };
 
@@ -126,7 +173,8 @@ export default function Builder() {
           return (
             <button key={i} onClick={() => setActive(i)}
               className={`w-full flex items-center gap-2 px-2 py-1.5 rounded border text-left
-                ${active === i ? "border-[var(--amber)]" : "hairline border"} bg-[var(--panel)]`}>
+                ${active === i ? "border-[var(--amber)]" : "hairline border"}
+                ${highlighted.has(i) ? "bg-[var(--raised)] shadow-[inset_3px_0_0_var(--ink)]" : "bg-[var(--panel)]"}`}>
               <span className="eyebrow w-9">{s}</span>
               {p ? (
                 <>
@@ -186,6 +234,36 @@ export default function Builder() {
         {error && <div className="text-[11px] text-[var(--down)]">{error}</div>}
         <div className="pt-2">
           <div className="flex items-center justify-between mb-1">
+            <span className="eyebrow">Repeated groups</span>
+            <span className="text-[11px] text-[var(--dim)] num"
+              title={handSet.data?.n_drafts ? `${handSet.data.n_drafts} draft(s) not counted` : undefined}>
+              {nSaved} saved
+            </span>
+          </div>
+          {nSaved === 0
+            ? <div className="text-[11px] text-[var(--dim)]">No saved lineups in this set yet.</div>
+            : groups.triples.length + groups.pairs.length === 0
+              ? <div className="text-[11px] text-[var(--dim)]">No two of these players share a saved lineup.</div>
+              : ([["3-man", groups.triples], ["2-man", groups.pairs]] as const).map(([label, list]) =>
+                  list.length > 0 && (
+                    <div key={label} className="mb-1">
+                      <div className="text-[10px] uppercase tracking-wider text-[var(--mute)]">{label}</div>
+                      {list.map((g) => {
+                        const names = g.ids.map((id) => byId.get(id)?.name ?? id).join(" · ");
+                        return (
+                          <div key={g.ids.join("-")} title={names}
+                            onMouseEnter={() => setHoverGroup(g.slots)} onMouseLeave={() => setHoverGroup(null)}
+                            className="flex justify-between gap-2 text-[11px] px-1 rounded hover:bg-[var(--raised)] cursor-default">
+                            <span className="truncate">{names}</span>
+                            <span className="num shrink-0">{g.count} <span className="text-[var(--dim)]">({num((g.count / nSaved) * 100, 0)}%)</span></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+        </div>
+        <div className="pt-2">
+          <div className="flex items-center justify-between mb-1">
             <span className="eyebrow">Fades ({fades.size})</span>
             {fades.size > 0 && (
               <button className="text-[11px] text-[var(--dim)] hover:text-[var(--ink)]"
@@ -226,7 +304,7 @@ export default function Builder() {
           <table className="w-full">
             <thead className="sticky top-0 bg-[var(--panel)]">
               <tr className="border-b hairline">
-                {["", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%"].map((h) => (
+                {["", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%", "Exp%"].map((h) => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
                 ))}
               </tr>
@@ -258,6 +336,7 @@ export default function Builder() {
                   <td className="px-2 py-1 text-[var(--down)]">{num(p.floor)}</td>
                   <td className="px-2 py-1 text-[var(--up)]">{num(p.ceiling)}</td>
                   <td className="px-2 py-1">{num(p.ownership)}</td>
+                  <td className={`px-2 py-1 ${expCount.has(p.player_id) ? "" : "text-[var(--mute)]"}`}>{num(expPct(p.player_id))}</td>
                 </tr>
                 );
               })}

@@ -146,6 +146,35 @@ def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
     ]}
 
 
+def _hand_set(db: Session, slate_id: int, user_id: int, pv_id: int) -> LineupSet | None:
+    """The set Builder saves land in: the user's latest hand set for this
+    slate, if it was built on the current pool version. None means the next
+    save starts a fresh set."""
+    ls = (db.query(LineupSet).filter_by(slate_id=slate_id, user_id=user_id, kind="hand")
+          .order_by(LineupSet.id.desc()).first())
+    return ls if ls is not None and ls.pool_version_id == pv_id else None
+
+
+@router.get("/set")
+def current_set(slate_id: int, db: Session = Depends(get_db),
+                user: User = Depends(current_user)):
+    """Saved (non-draft) lineups in the set Builder saves land in, as player-id
+    lists. The Builder derives player exposure and repeated 2/3-man groups
+    from these. Drafts are left out: they're partial and not yet entries."""
+    pv = require_pool(db, slate_id)
+    ls = _hand_set(db, slate_id, user.id, pv.id)
+    if ls is None:
+        return {"lineup_set_id": None, "label": "Hand builds", "n_drafts": 0, "lineups": []}
+    rows = sorted(ls.lineups, key=lambda r: r.ordinal)
+    return {
+        "lineup_set_id": ls.id,
+        "label": ls.label,
+        "n_drafts": sum(1 for r in rows if r.is_draft),
+        "lineups": [[int(sl["player_id"]) for sl in r.slots if sl.get("player_id") is not None]
+                    for r in rows if not r.is_draft],
+    }
+
+
 class SaveIn(LineupIn):
     label: str = "Hand build"
     is_draft: bool = False
@@ -161,9 +190,8 @@ def save(slate_id: int, body: SaveIn, db: Session = Depends(get_db),
     except Exception:
         pass
     by_id = {p.id: p for p in players}
-    ls = (db.query(LineupSet).filter_by(slate_id=slate_id, user_id=user.id, kind="hand")
-          .order_by(LineupSet.id.desc()).first())
-    if not ls or ls.pool_version_id != pv.id:
+    ls = _hand_set(db, slate_id, user.id, pv.id)
+    if ls is None:
         ls = LineupSet(user_id=user.id, slate_id=slate_id, pool_version_id=pv.id,
                        kind="hand", label="Hand builds", status="built",
                        sims_blob_key=pv.sims_blob_key)
