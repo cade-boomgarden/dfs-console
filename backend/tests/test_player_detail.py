@@ -19,12 +19,13 @@ from backend.jobs.runner import JobContext                    # noqa: E402
 from backend.jobs import salaries                             # noqa: E402
 from backend.jobs.salaries import backfill_week               # noqa: E402
 from backend.models.db import Base, SessionLocal, engine      # noqa: E402
-from backend.models.models import (PlayerCanonical, SalaryHistory,  # noqa: E402
-                                   Slate)
+from backend.models.models import (PlayerCanonical, PoolPlayer,  # noqa: E402
+                                   SalaryHistory, Slate)
 from backend.sources import draftkings as dk                  # noqa: E402
 
 FIX = Path(__file__).parent / "fixtures"
 DRAFTABLES = json.loads((FIX / "dkdraftables_fixture_small.json").read_text())
+FP = json.loads((FIX / "fp_projections.json").read_text())
 
 
 class NullCtx(JobContext):
@@ -154,7 +155,7 @@ def test_ingest_records_salaries_and_backfill_adds_a_week():
     try:
         out = backfill_week(db, NullCtx(), 2026, 2, None,
                             lambda ids: {g: groups.get(g) for g in ids},
-                            max_probes=2000, frac=(0, 1))
+                            max_probes=2000, frac=(0, 1), fetch_fp=lambda s, w: FP)
     finally:
         salaries._anchors = real
     assert out["draft_group_id"] == slate_gid + 700, out
@@ -165,10 +166,32 @@ def test_ingest_records_salaries_and_backfill_adds_a_week():
     assert [(h.week, h.salary, h.source) for h in hist] == [
         (1, 7000, "ingest"), (2, 7400, "backfill")]
 
-    # re-running the same week replaces, never duplicates
-    backfill_week(db, NullCtx(), 2026, 2, slate_gid + 700,
-                  lambda ids: {g: groups.get(g) for g in ids}, 10, (0, 1))
+    # projections came along and match what ingest gave the same player
+    pool_proj = (db.query(PoolPlayer).filter_by(pool_version_id=r["pool_version_id"],
+                                                player_id=hist[1].player_id).one().projection)
+    assert hist[1].projection == round(pool_proj, 2) and hist[1].proj_stats
+    assert out["projected"] >= 0.8 * r["pool_size"], out
+    assert "projection_error" not in out
+
+    # re-running the same week replaces, never duplicates; an FP failure
+    # is reported and leaves the salaries in place
+    def down(s, w):
+        raise RuntimeError("FantasyPros 503")
+    out = backfill_week(db, NullCtx(), 2026, 2, slate_gid + 700,
+                        lambda ids: {g: groups.get(g) for g in ids}, 10, (0, 1), fetch_fp=down)
+    assert out["salaries"] == n_players and "503" in out["projection_error"]
+    assert (db.query(SalaryHistory).filter_by(player_dk_id=11370, week=2).one().projection
+            == hist[1].projection)                  # earlier projections survive
     assert db.query(SalaryHistory).filter_by(player_dk_id=11370).count() == 2
+    db.close()
+
+
+def test_fill_projections_refuses_thin_fp_payload():
+    db = SessionLocal()
+    gid = db.query(SalaryHistory.draft_group_id).filter_by(week=2, season=2026).first()[0]
+    thin = dict(FP, players=FP["players"][:50])
+    res = salaries.fill_projections(db, gid, thin)
+    assert "not available" in res["error"]
     db.close()
 
 
@@ -199,6 +222,7 @@ def test_player_detail_merges_salary_pool_and_games():
     assert wk[(1, "ingest")]["projection"] is not None
     assert wk[(1, "ingest")]["dk_points"] == 24.5
     assert wk[(2, "backfill")]["salary"] == 7400 and wk[(2, "backfill")]["dk_points"] == 18.0
+    assert wk[(2, "backfill")]["projection"] is not None
     assert [g["week"] for g in out["games"]] == [1, 2]
     db.close()
 

@@ -47,7 +47,7 @@ def player_detail(player_id: int, slate_id: int | None = None,
             "draft_group_id": s.draft_group_id, "season": s.season, "week": s.week,
             "slate_date": s.slate_date, "salary": s.salary, "team": s.team,
             "opponent": s.opponent, "status": s.status, "source": s.source,
-            "projection": None, "ownership": None, "actual_own": None}
+            "projection": s.projection, "ownership": None, "actual_own": None}
 
     # pool rows cover slates ingested before salary history existed
     pool_rows = (db.query(PoolPlayer, Slate)

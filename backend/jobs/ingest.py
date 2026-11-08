@@ -11,14 +11,15 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from ..identity.resolver import AUTO_ACCEPT, Candidate, resolve_name
+from ..identity.resolver import Candidate
 from ..identity.rules import norm_name, norm_team
 from ..models.db import SessionLocal
 from ..models.models import (Game, OddsSnapshot, PlayerCanonical, PoolPlayer,
-                             PoolVersion, ReviewItem, Slate, SourceMap)
+                             PoolVersion, ReviewItem, Slate)
 from ..settings import get_settings
 from ..sources import draftkings as dk
 from ..sources import fantasypros as fp
+from .fpmatch import match_fp, projection_points
 from ..sources import odds as oddsrc
 from .runner import JobContext, register
 
@@ -151,38 +152,8 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                   for r in dk_players.values()]
     slate_teams = {r["team"] for r in dk_players.values()}
 
-    stats_by_canon: dict[int, dict] = {}
-    unresolved: list[dict] = []
-    n_unmatched = 0
-    for rec in fp_players:
-        # FP covers the whole league; players from non-slate teams cannot
-        # correspond to anyone on this slate.
-        if norm_team(rec["team"]) not in slate_teams:
-            continue
-        raw_key = f"{rec['name']}|{rec['team']}|{rec['position']}"
-        cached = db.query(SourceMap).filter_by(source="fantasypros", raw_key=raw_key).first()
-        if not (rec.get("stats") or {}):
-            continue          # a record with no stats is not a projection
-        if cached:
-            stats_by_canon[cached.player_id] = rec["stats"]
-            canon = db.get(PlayerCanonical, cached.player_id)
-            if canon and rec.get("fpid"):
-                canon.fpid, canon.mflid = rec.get("fpid"), rec.get("mflid")
-            continue
-        res = resolve_name(rec["name"], rec["team"], rec["position"], candidates)
-        if res.player_id and res.confidence >= AUTO_ACCEPT:
-            cid = int(res.player_id)
-            stats_by_canon[cid] = rec["stats"]
-            db.add(SourceMap(source="fantasypros", raw_key=raw_key,
-                             player_id=cid, confidence=res.confidence, method=res.method))
-            canon = db.get(PlayerCanonical, cid)
-            if canon and rec.get("fpid"):
-                canon.fpid, canon.mflid = rec.get("fpid"), rec.get("mflid")
-        else:
-            n_unmatched += 1
-            rec = dict(rec, raw_key=raw_key,
-                       confidence=res.confidence, method=res.method)
-            unresolved.append(rec)
+    stats_by_canon, unresolved, n_unmatched = match_fp(
+        db, fp_players, candidates, slate_teams)
 
     # --- Review queue is SLATE-driven, not source-driven ----------------------
     # FantasyPros lists ~30 players per team; DraftKings lists ~14. Queueing
@@ -264,7 +235,7 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
             opponent=opp, game_key=f"g{rec['competition_id']}",
             salary=rec["salary"], status=rec.get("status"),
             dvp_rank=rec.get("dvp_rank"),
-            projection=float(stats.get("points_ppr", stats.get("points", 0.0)) or 0.0),
+            projection=projection_points(stats),
             implied_opp_total=implied.get(opp),
             stats=stats, draftable_ids=rec["draftable_ids"],
         ))

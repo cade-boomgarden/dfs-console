@@ -280,6 +280,10 @@ class SalaryHistory(Base):
     opponent: Mapped[str] = mapped_column(String(8), default="")
     status: Mapped[str | None] = mapped_column(String(8), nullable=True)
     source: Mapped[str] = mapped_column(String(16), default="ingest")  # ingest|backfill
+    # FantasyPros projection for that week, filled by the projection backfill
+    # (ingested slates keep theirs on the pool version)
+    projection: Mapped[float | None] = mapped_column(Float, nullable=True)
+    proj_stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     __table_args__ = (UniqueConstraint("draft_group_id", "player_dk_id"),)
 
 
