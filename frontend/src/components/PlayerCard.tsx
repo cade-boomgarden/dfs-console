@@ -16,8 +16,8 @@ export function usePoolProfiles(slateId: string | undefined) {
   return q.data?.players ?? {};
 }
 
-type Fmt = "pct" | "yd" | "x2";
-type Row = [key: string, label: string, fmt: Fmt];
+export type Fmt = "pct" | "yd" | "x2";
+export type Row = [key: string, label: string, fmt: Fmt];
 
 const RECEIVING: Row[] = [
   ["snap_share", "Snap share", "pct"],
@@ -32,7 +32,7 @@ const RECEIVING: Row[] = [
   ["yac_per_rec", "YAC per catch", "yd"],
 ];
 
-const ROWS: Record<string, Row[]> = {
+export const ROWS: Record<string, Row[]> = {
   QB: [
     ["snap_share", "Snap share", "pct"],
     ["ypa", "Yards per attempt", "yd"],
@@ -60,10 +60,23 @@ const ROWS: Record<string, Row[]> = {
   TE: RECEIVING,
 };
 
-function fmt(v: number, f: Fmt): string {
+export function fmt(v: number, f: Fmt): string {
   if (f === "pct") return `${(v * 100).toFixed(1)}%`;
   if (f === "x2") return v.toFixed(2);
   return v.toFixed(1);
+}
+
+/** Percentile within position as a 0-100 bar plus the number. */
+export function PctBar({ pct, width = 64 }: { pct: number | null; width?: number }) {
+  if (pct === null) return <span className="text-[var(--mute)]">—</span>;
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="relative h-1.5 rounded bg-[var(--raised)] overflow-hidden" style={{ width }}>
+        <span className="absolute inset-y-0 left-0 bg-[var(--dim)]" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="w-6 text-right">{pct}</span>
+    </span>
+  );
 }
 
 function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile }) {
@@ -120,14 +133,7 @@ function Card({ player, profile }: { player: PoolPlayer; profile?: PlayerProfile
                     <td className="py-0.5 pr-2 text-[var(--dim)] font-[family-name:var(--font-ui)] text-[11px]">{label}</td>
                     <td className="py-0.5 text-right">{fmt(feat.value, f)}</td>
                     <td className="py-0.5 pl-3">
-                      {feat.pct === null ? <span className="text-[var(--mute)]">—</span> : (
-                        <span className="flex items-center gap-1.5">
-                          <span className="relative h-1.5 w-16 rounded bg-[var(--raised)] overflow-hidden">
-                            <span className="absolute inset-y-0 left-0 bg-[var(--dim)]" style={{ width: `${feat.pct}%` }} />
-                          </span>
-                          <span className="w-6 text-right">{feat.pct}</span>
-                        </span>
-                      )}
+                      <PctBar pct={feat.pct} />
                     </td>
                   </tr>
                 );

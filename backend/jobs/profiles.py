@@ -22,11 +22,12 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..models.db import SessionLocal
-from ..models.models import PlayerCanonical, ProfileSnapshot
+from ..models.models import PlayerCanonical, PlayerGameLog, ProfileSnapshot
 from .runner import JobContext, register
 
 COEFFS = Path(__file__).resolve().parents[1] / "core" / "data" / "allocation_coeffs.json"
 HISTORY_SEASONS = 3
+GAME_LOG_SEASONS = 2    # current + prior season on the player detail page
 
 
 def store_artifact(db: Session, artifact: dict) -> dict:
@@ -62,6 +63,18 @@ def store_artifact(db: Session, artifact: dict) -> dict:
             "draft_capital_set": draft_set}
 
 
+def store_game_logs(db: Session, rows: list[dict]) -> int:
+    """Replace the game logs for every season present in `rows`."""
+    seasons = sorted({r["season"] for r in rows})
+    if not seasons:
+        return 0
+    db.query(PlayerGameLog).filter(PlayerGameLog.season.in_(seasons)).delete(
+        synchronize_session=False)
+    db.bulk_insert_mappings(PlayerGameLog, rows)
+    db.commit()
+    return len(rows)
+
+
 def link_gsis(db: Session, by_fp: dict[int, str], by_mfl: dict[int, str]) -> int:
     """Set PlayerCanonical.gsis_id from the FantasyPros ids ingest stores
     (requirements: FP -> gsis is an integer join through db_playerids).
@@ -91,6 +104,9 @@ def run_refresh(db: Session, ctx: JobContext, season: int, week: int) -> dict:
         linked = link_gsis(db, *nflverse.id_crosswalk(data))
         ctx.update(0.6, "Building player-week usage")
         usage, _ = nflverse.build_usage(data, have)
+        ctx.update(0.7, "Saving player game logs")
+        logs = store_game_logs(db, nflverse.build_game_logs(
+            data, usage, [s for s in have if s >= season - GAME_LOG_SEASONS + 1]))
         ctx.update(0.75, f"Computing profiles as of {season} wk{week}")
         coeffs = json.loads(COEFFS.read_text())
         artifact = nflverse.build_artifact(
@@ -101,6 +117,7 @@ def run_refresh(db: Session, ctx: JobContext, season: int, week: int) -> dict:
     result = store_artifact(db, artifact)
     result["data_through"] = artifact["meta"]["data_through"]
     result["players_linked"] = linked
+    result["game_logs"] = logs
     return result
 
 

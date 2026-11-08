@@ -8,6 +8,7 @@ import {
 import { api, PoolPlayer } from "../api";
 import { money, num } from "../ui";
 import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
+import { EyeButton, PlayerDrawer } from "../components/PlayerDetail";
 
 const col = createColumnHelper<PoolPlayer>();
 
@@ -20,6 +21,7 @@ export default function Pool() {
   const [pos, setPos] = useState("ALL");
   const [q, setQ] = useState("");
   const [sorting, setSorting] = useState<SortingState>([{ id: "salary", desc: true }]);
+  const [detail, setDetail] = useState<number | null>(null);
 
   const setAdj = async (playerId: number, kind: string, value: number | null, on: boolean) => {
     if (on) await api.post(`/api/slates/${slateId}/pool/adjustments`, { player_id: playerId, kind, value });
@@ -28,6 +30,9 @@ export default function Pool() {
   };
 
   const columns = useMemo(() => [
+    col.display({ id: "view", header: "", cell: ({ row }) => (
+      <EyeButton onClick={() => setDetail(row.original.player_id)} />
+    )}),
     col.display({ id: "lock", header: "🔒", cell: ({ row }) => {
       const a = row.original.adjustments;
       return <input type="checkbox" checked={!!a.lock} title="Lock"
@@ -128,6 +133,7 @@ export default function Pool() {
           </tbody>
         </table>
       </div>
+      <PlayerDrawer playerId={detail} slateId={slateId} onClose={() => setDetail(null)} />
       <div className="text-[11px] text-[var(--dim)]">{data.length} players · Δ adds points, × multiplies the projection. Both persist for this slate.</div>
     </div>
   );

@@ -10,6 +10,7 @@ the web service's memory.
 Data directory layout (what `download` writes, and what the CLIs read):
     pbp_<season>.parquet      play-by-play
     player_stats.parquet      weekly player stats (position lookup)
+    game_stats.parquet        weekly box scores (player game logs)
     snap_counts.parquet       PFR snap counts
     ff_playerids.parquet      id crosswalk (pfr_id -> gsis_id)
     draft_picks.parquet       draft capital (optional)
@@ -24,6 +25,8 @@ import polars as pl
 
 from ..core.profiles import (POSITION_PRIORS, UsageGame, compute_profile,
                              season_to_date)
+from ..core.scoring import BOX_FIELDS, dk_offense_points
+from ..identity.rules import norm_team
 
 RELEASES = "https://github.com/nflverse/nflverse-data/releases/download"
 FF_PLAYERIDS = ("https://raw.githubusercontent.com/dynastyprocess/data/"
@@ -97,6 +100,9 @@ def download(data: Path, seasons: list[int],
     pl.concat([pl.scan_parquet(p).select(
         "season", "player_id", "position", "player_display_name") for p in stats],
         how="vertical_relaxed").sink_parquet(data / "player_stats.parquet")
+    # box scores for the player game logs (display only)
+    pl.concat([_box_frame(p) for p in stats],
+              how="diagonal_relaxed").sink_parquet(data / "game_stats.parquet")
     pl.concat([pl.scan_parquet(p).select(
         "season", "week", "game_type", "team", "pfr_player_id", "offense_snaps")
         for p in snaps], how="vertical_relaxed").sink_parquet(data / "snap_counts.parquet")
@@ -377,3 +383,57 @@ def build_artifact(usage: pl.DataFrame, coeffs: dict, season: int, week: int,
         "profiles": profiles,
         "draft_capital": draft,
     }
+
+
+# --------------------------------------------------------------------------
+# Player game logs (display only: the player detail page)
+# --------------------------------------------------------------------------
+
+_BOX_KEYS = ("season", "week", "season_type", "player_id", "position",
+             "team", "opponent_team")
+
+
+def _box_frame(path: Path) -> pl.LazyFrame:
+    """Box-score columns from one stats_player_week file. Columns a season's
+    file lacks come through as 0 rather than failing the refresh."""
+    lf = pl.scan_parquet(path)
+    have = set(lf.collect_schema().names())
+    cols = [pl.col(c) for c in _BOX_KEYS if c in have]
+    cols += [pl.col(c).cast(pl.Float64) if c in have else pl.lit(0.0).alias(c)
+             for c in BOX_FIELDS]
+    return lf.select(cols)
+
+
+def build_game_logs(data: Path, usage: pl.DataFrame,
+                    seasons: list[int]) -> list[dict]:
+    """One row per regular-season QB/RB/WR/TE game in `seasons`: DK points,
+    the nonzero box-score counts, and that game's value of every profile
+    feature (`season_to_date` over a single game)."""
+    box = (pl.scan_parquet(data / "game_stats.parquet")
+           .filter((pl.col("season_type") == "REG")
+                   & pl.col("season").is_in(seasons)
+                   & pl.col("position").is_in(["QB", "RB", "WR", "TE"])
+                   & pl.col("player_id").is_not_null())
+           .collect())
+
+    feats: dict[tuple[str, int, int], dict[str, float]] = {}
+    for r in usage.filter(pl.col("season").is_in(seasons)).iter_rows(named=True):
+        g = UsageGame(season=r["season"], week=r["week"], team=r["team"] or "",
+                      **{f: float(r.get(f) or 0.0) for f in USAGE_FIELDS})
+        f, _ = season_to_date([g], r["position"])
+        feats[(r["gsis_id"], r["season"], r["week"])] = {
+            k: round(v, 4) for k, v in f.items()}
+
+    rows = []
+    for r in box.iter_rows(named=True):
+        b = {k: r[k] for k in BOX_FIELDS if r.get(k)}
+        b = {k: int(v) if float(v).is_integer() else round(v, 1) for k, v in b.items()}
+        rows.append({
+            "gsis_id": r["player_id"], "season": int(r["season"]), "week": int(r["week"]),
+            "team": norm_team(r.get("team") or ""),
+            "opponent": norm_team(r.get("opponent_team") or ""),
+            "position": r["position"], "dk_points": dk_offense_points(r),
+            "box": b,
+            "usage": feats.get((r["player_id"], int(r["season"]), int(r["week"])), {}),
+        })
+    return rows

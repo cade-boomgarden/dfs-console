@@ -5,8 +5,8 @@ All parsers are pure functions over captured payloads (golden-file tested);
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Any
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Callable
 
 import httpx
 
@@ -166,3 +166,161 @@ def fetch_draftables(draft_group_id: int, client: httpx.Client | None = None) ->
 def fetch_contest_detail(contest_id: int | str, client: httpx.Client | None = None) -> dict[str, Any]:
     c = client or httpx.Client(timeout=30)
     return c.get(CONTEST_DETAIL.format(cid=contest_id)).json()
+
+
+# --- historical slate discovery (salary backfill) ----------------------------
+#
+# The lobby lists only current and upcoming draft groups, so a past week's
+# main slate has to be found by probing draft group ids. Ported from the
+# research-side `discover_slates.py` (see claude/slate-discovery-log.md):
+#
+# * Classic slot ids {66..71} are stable 2021->2026, but slot ids are reused
+#   across sports (rugby uses 70), so they confirm, never gate alone. The
+#   competitions' `sport` field gates NFL; CFB carries "CFB".
+# * DK sim games (Madden streams) look Classic but have exactly 3 games on a
+#   2h grid; `n_games >= 8` rejects them.
+# * A main slate's first kick is Sunday 17:00Z or 18:00Z (1pm ET, EDT/EST).
+# * ids are only roughly monotonic in date (DK creates groups in bursts,
+#   +-2 weeks jitter), so the search walks outward from an interpolated
+#   guess rather than solving for a date.
+# * Some ids return 200 with empty payloads (void groups).
+
+CLASSIC_SLOTS = frozenset({66, 67, 68, 69, 70, 71})
+ID_RATE_PER_DAY = 55.0       # observed 2021->2026 average id velocity
+
+
+def _parse_time(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.rstrip("Z")[:19]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def slate_shape(span_hours: float) -> str:
+    """Label a slate by its first-to-last kickoff span (never a gate)."""
+    if span_hours < 1:
+        return "early_only"
+    if span_hours <= 5:
+        return "sunday_afternoon"
+    if span_hours <= 10:
+        return "sunday_full"
+    return "sun_mon"
+
+
+def classify_group(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Shape of an NFL Classic draft group, or None for anything else
+    (other sports, Showdown, void groups, error payloads)."""
+    if not isinstance(payload, dict):
+        return None
+    comps = payload.get("competitions") or []
+    rows = payload.get("draftables") or []
+    if not comps or not rows:
+        return None
+    if any((c.get("sport") or "").upper() != "NFL" for c in comps):
+        return None
+    if not CLASSIC_SLOTS <= {d.get("rosterSlotId") for d in rows}:
+        return None
+    if "K" in {d.get("position") for d in rows}:
+        return None
+    starts = sorted(t for t in (_parse_time(c.get("startTime")) for c in comps) if t)
+    if not starts:
+        return None
+    span = (starts[-1] - starts[0]).total_seconds() / 3600
+    return {
+        "n_games": len(comps),
+        "n_players": len({d.get("playerDkId") for d in rows}),
+        "first_kick": starts[0].isoformat().replace("+00:00", "Z"),
+        "last_kick": starts[-1].isoformat().replace("+00:00", "Z"),
+        "shape": slate_shape(span),
+    }
+
+
+def is_main_candidate(info: dict[str, Any] | None, sunday: date) -> bool:
+    """A main-slate candidate for the Sunday `sunday`: >=8 games, first kick
+    on that Sunday at 1pm ET (17:00Z under EDT, 18:00Z under EST)."""
+    if not info or info["n_games"] < 8:
+        return False
+    first = _parse_time(info["first_kick"])
+    return bool(first and first.date() == sunday and first.hour in (17, 18))
+
+
+def pick_main(cands: dict[int, dict[str, Any]]) -> int | None:
+    """The main slate among one Sunday's candidates: the Sunday-afternoon
+    group with the most games (DK's flagship 2021-2025 without exception, see
+    claude/slate-inventory.md); failing that, the most games of any shape."""
+    if not cands:
+        return None
+    afternoon = {g: c for g, c in cands.items() if c["shape"] == "sunday_afternoon"}
+    pool = afternoon or cands
+    return max(pool, key=lambda g: (pool[g]["n_games"], -g))
+
+
+def nfl_week_sunday(season: int, week: int) -> date:
+    """Sunday of NFL regular-season `week`: Week 1 Sunday is the Sunday after
+    Labor Day (first Monday in September)."""
+    d = date(season, 9, 1)
+    labor_day = d + timedelta(days=(0 - d.weekday()) % 7)
+    return labor_day + timedelta(days=6 + 7 * (week - 1))
+
+
+def estimate_group_id(anchors: list[tuple[date, int]], target: date) -> int | None:
+    """Interpolate a draft group id for `target` from known (date, id) pairs;
+    extrapolate at ID_RATE_PER_DAY when the target is outside them."""
+    pts = sorted(anchors)
+    if not pts:
+        return None
+    before = [p for p in pts if p[0] <= target]
+    after = [p for p in pts if p[0] > target]
+    if before and after:
+        (d0, g0), (d1, g1) = before[-1], after[0]
+        days = (d1 - d0).days or 1
+        return round(g0 + (g1 - g0) * (target - d0).days / days)
+    d0, g0 = (before[-1] if before else after[0])
+    return round(g0 + ID_RATE_PER_DAY * (target - d0).days)
+
+
+def search_main_slate(
+    fetch_many: Callable[[list[int]], dict[int, dict[str, Any] | None]],
+    sunday: date,
+    center: int,
+    max_probes: int = 3000,
+    batch: int = 16,
+    sibling_radius: int = 40,
+    progress: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
+    """Probe ids outward from `center` until a main-slate candidate for
+    `sunday` turns up, then sweep +-`sibling_radius` around every hit so the
+    whole menu for that date is seen before choosing.
+
+    `fetch_many(ids)` returns {id: draftables payload or None}. Returns
+    {"draft_group_id", "candidates": {id: info}, "probes"}.
+    """
+    order = [center]
+    for k in range(1, max_probes):
+        order += [center + k, center - k]
+    order = [g for g in order if g > 0][:max_probes]
+
+    seen: set[int] = set()
+    cands: dict[int, dict[str, Any]] = {}
+    queue = list(order)
+    found_at: int | None = None
+    while queue:
+        ids = [g for g in queue[:batch] if g not in seen]
+        queue = queue[batch:]
+        if not ids:
+            continue
+        seen.update(ids)
+        for gid, payload in fetch_many(ids).items():
+            info = classify_group(payload)
+            if is_main_candidate(info, sunday):
+                cands[gid] = info
+                if found_at is None:
+                    found_at = len(seen)
+                    near = [g for g in range(gid - sibling_radius, gid + sibling_radius + 1)
+                            if g > 0 and g not in seen]
+                    queue = near            # finish with the siblings, then stop
+        if progress:
+            progress(len(seen), max_probes)
+    return {"draft_group_id": pick_main(cands), "candidates": cands, "probes": len(seen)}

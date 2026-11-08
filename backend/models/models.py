@@ -261,6 +261,49 @@ class ProfileSnapshot(Base):
     __table_args__ = (UniqueConstraint("gsis_id", "season", "week"),)
 
 
+class SalaryHistory(Base):
+    """One DK salary per player per draft group. Written by every ingest and
+    by the salary backfill job, which pulls draftables only (no projections,
+    no odds) for weeks that were never ingested. Keyed on playerDkId, which is
+    stable across seasons, so a backfilled row needs no name matching."""
+    __tablename__ = "salary_history"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"), nullable=True, index=True)
+    player_dk_id: Mapped[int] = mapped_column(Integer, index=True)
+    draft_group_id: Mapped[int] = mapped_column(Integer)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slate_date: Mapped[str | None] = mapped_column(String(10), nullable=True)  # first kick, UTC date
+    salary: Mapped[int] = mapped_column(Integer)
+    position: Mapped[str] = mapped_column(String(8), default="")
+    team: Mapped[str] = mapped_column(String(8), default="")
+    opponent: Mapped[str] = mapped_column(String(8), default="")
+    status: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="ingest")  # ingest|backfill
+    __table_args__ = (UniqueConstraint("draft_group_id", "player_dk_id"),)
+
+
+class PlayerGameLog(Base):
+    """One regular-season game for one player, from nflverse. Written by the
+    profile refresh for the current and prior season. Display only (player
+    detail page); the sims read ProfileSnapshot.
+
+    `box` holds the box-score counts, `usage` the per-game values of the
+    profile features (same keys as ProfileSnapshot.features)."""
+    __tablename__ = "player_game_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    gsis_id: Mapped[str] = mapped_column(String(16), index=True)
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    team: Mapped[str] = mapped_column(String(8), default="")
+    opponent: Mapped[str] = mapped_column(String(8), default="")
+    position: Mapped[str] = mapped_column(String(8), default="")
+    dk_points: Mapped[float] = mapped_column(Float, default=0.0)
+    box: Mapped[dict] = mapped_column(JSON, default=dict)
+    usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("gsis_id", "season", "week"),)
+
+
 class OddsSnapshot(Base):
     """Persist every snapshot -- line movement Wed->Sun is free signal."""
     __tablename__ = "odds_snapshots"

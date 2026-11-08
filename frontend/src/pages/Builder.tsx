@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { api, Evaluation, PoolPlayer } from "../api";
 import { Btn, DistStrip, Field, money, num } from "../ui";
 import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
+import { EyeButton, PlayerDrawer } from "../components/PlayerDetail";
 
 const SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
 const SALARY_CAP = 50000;
@@ -46,6 +47,7 @@ export default function Builder() {
   // the same fade list. Pool-page excludes still apply on top.
   const [fades, setFades] = useState<Set<number>>(new Set());
   const [objective, setObjective] = useState<Objective>("mean");
+  const [detail, setDetail] = useState<number | null>(null);
   const timer = useRef<number>();
 
   const byId = useMemo(() => {
@@ -178,6 +180,7 @@ export default function Builder() {
               <span className="eyebrow w-9">{s}</span>
               {p ? (
                 <>
+                  <EyeButton asSpan onClick={() => setDetail(p.player_id)} />
                   <PlayerHover player={p} profile={profiles[p.player_id]} className="flex-1 truncate">{p.name}</PlayerHover>
                   <span className="num text-[var(--dim)]">{money(p.salary)}</span>
                   <span title="Fade: remove and keep the optimizer off this player"
@@ -304,7 +307,7 @@ export default function Builder() {
           <table className="w-full">
             <thead className="sticky top-0 bg-[var(--panel)]">
               <tr className="border-b hairline">
-                {["", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%", "Exp%"].map((h) => (
+                {["", "", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%", "Exp%"].map((h) => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
                 ))}
               </tr>
@@ -314,7 +317,10 @@ export default function Builder() {
                 const faded = fades.has(p.player_id);
                 return (
                 <tr key={p.player_id} onClick={() => pick(p.player_id)}
-                  className={`border-b hairline hover:bg-[var(--raised)] cursor-pointer ${faded ? "[&>td:not(:first-child)]:opacity-40" : ""}`}>
+                  className={`border-b hairline hover:bg-[var(--raised)] cursor-pointer ${faded ? "[&>td:nth-child(n+3)]:opacity-40" : ""}`}>
+                  <td className="pl-2 py-1 w-6">
+                    <EyeButton onClick={() => setDetail(p.player_id)} />
+                  </td>
                   <td className="px-2 py-1 w-12">
                     <button onClick={(e) => { e.stopPropagation(); toggleFade(p.player_id); }}
                       title={faded ? "Unfade" : "Fade: the optimizer skips this player"}
@@ -344,6 +350,8 @@ export default function Builder() {
           </table>
         </div>
       </div>
+
+      <PlayerDrawer playerId={detail} slateId={slateId} onClose={() => setDetail(null)} />
 
       {/* live evaluation */}
       <div className="space-y-3">

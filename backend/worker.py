@@ -7,7 +7,7 @@ from .settings import get_settings
 
 # job registration side effects
 from .jobs import (backup, blobgc, field, ingest, optimals,  # noqa: F401
-                   optimize, simulate)
+                   optimize, salaries, simulate)
 from .jobs import profiles as profiles_job  # noqa: F401
 
 if __name__ == "__main__":

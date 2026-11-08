@@ -1,0 +1,18 @@
+{
+  "a": 26.144,
+  "b": 2.728,
+  "meta": {
+    "seasons": [
+      2022,
+      2023,
+      2024,
+      2025
+    ],
+    "n_team_games": 2174,
+    "resid_sd": 22.63,
+    "r": 0.408,
+    "fit_date": "2026-11-07",
+    "target": "sum of QB/RB/WR/TE DK points per team-game",
+    "source": "nflverse stats_player_week + nfldata games.csv closing lines"
+  }
+}

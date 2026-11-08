@@ -50,3 +50,36 @@ def simulate_dst(
     pts += rng.poisson(max(tds, 0.0), n) * DST_TD
     pts += rng.poisson(max(safeties, 0.0), n) * DST_SAFETY
     return pts
+
+
+# --- offensive DK points from a box score -------------------------------------
+# Used for display (player game logs) and the Vegas fit; the sims score
+# components per draw in variance.py.
+
+BOX_FIELDS = (
+    "completions", "attempts", "passing_yards", "passing_tds",
+    "passing_interceptions", "sacks_suffered", "carries", "rushing_yards",
+    "rushing_tds", "targets", "receptions", "receiving_yards", "receiving_tds",
+    "fumbles_lost_total", "passing_2pt_conversions", "rushing_2pt_conversions",
+    "receiving_2pt_conversions", "special_teams_tds",
+)
+
+
+def dk_offense_points(box: dict) -> float:
+    """DK Classic points for one player-game from nflverse box-score fields
+    (missing fields count as 0). 0.04/pass yd, 4/pass TD, -1/INT, +3 at 300;
+    0.1/rush or rec yd, 6/TD, +3 at 100 each; 1/reception; -1/fumble lost;
+    2/two-point conversion; 6/return TD."""
+    g = lambda k: float(box.get(k) or 0.0)          # noqa: E731
+    pts = (g("passing_yards") * 0.04 + g("passing_tds") * 4
+           - g("passing_interceptions")
+           + (3 if g("passing_yards") >= 300 else 0)
+           + g("rushing_yards") * 0.1 + g("rushing_tds") * 6
+           + (3 if g("rushing_yards") >= 100 else 0)
+           + g("receptions") + g("receiving_yards") * 0.1 + g("receiving_tds") * 6
+           + (3 if g("receiving_yards") >= 100 else 0)
+           - g("fumbles_lost_total")
+           + 2 * (g("passing_2pt_conversions") + g("rushing_2pt_conversions")
+                  + g("receiving_2pt_conversions"))
+           + 6 * g("special_teams_tds"))
+    return round(pts, 2)

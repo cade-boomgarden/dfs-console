@@ -13,6 +13,7 @@ import SetDetail from "./pages/SetDetail";
 import Contests from "./pages/Contests";
 import Jobs from "./pages/Jobs";
 import Review from "./pages/Review";
+import PlayerPage from "./pages/PlayerPage";
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
 
@@ -77,6 +78,7 @@ function Gate() {
         <Route path="/slate/:slateId/optimals" element={<Optimals />} />
         <Route path="/slate/:slateId/sets/:setId" element={<SetDetail />} />
         <Route path="/slate/:slateId/contests" element={<Contests />} />
+        <Route path="/slate/:slateId/player/:playerId" element={<PlayerPage />} />
         <Route path="/jobs" element={<Jobs />} />
         <Route path="/review" element={<Review />} />
       </Routes>

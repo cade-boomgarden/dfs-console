@@ -91,6 +91,11 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
         slate.game_count = len(parsed["games"])
     db.commit()
 
+    # salary history for the player detail pages (every listed player,
+    # OUT/IR included -- the pool below drops them)
+    from .salaries import record_salaries
+    record_salaries(db, gid, slate.season, slate.week, parsed)
+
     comp_to_game: dict[int, Game] = {}
     for g in parsed["games"]:
         home, away = norm_team(g["home"]), norm_team(g["away"])

@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from ..auth.security import current_user
 from ..jobs.runner import enqueue
 from ..models.db import get_db
-from ..models.models import Game, PoolVersion, Slate, User
+from ..core.gamescores import game_scores, team_scores
+from ..models.models import Game, PoolPlayer, PoolVersion, Slate, User
 
 router = APIRouter(prefix="/api/slates", tags=["slates"])
 
@@ -40,13 +41,20 @@ def slate_detail(slate_id: int, db: Session = Depends(get_db),
     games = db.query(Game).filter_by(slate_id=slate_id).all()
     versions = (db.query(PoolVersion).filter_by(slate_id=slate_id)
                 .order_by(PoolVersion.id.desc()).all())
+    scores = _game_scores(db, games, versions)
     return {
         "id": s.id, "name": s.name, "draft_group_id": s.draft_group_id,
         "start_time": s.start_time,
+        "vegas_offset": scores["vegas_offset"],
         "games": [{
             "id": g.id, "home": g.home, "away": g.away, "start_time": g.start_time,
             "total": g.total, "home_spread": g.home_spread,
             "home_implied": g.home_implied, "away_implied": g.away_implied,
+            "scores": {
+                "home": scores["teams"].get(g.home),
+                "away": scores["teams"].get(g.away),
+                **game_scores(scores["teams"].get(g.home), scores["teams"].get(g.away)),
+            },
         } for g in games],
         "pool_versions": [{
             "id": v.id, "label": v.label, "created_at": str(v.created_at),
@@ -54,6 +62,21 @@ def slate_detail(slate_id: int, db: Session = Depends(get_db),
             "n_sims": v.n_sims,
         } for v in versions],
     }
+
+
+def _game_scores(db: Session, games: list[Game], versions: list[PoolVersion]) -> dict:
+    """Price edge and Vegas gap per team (core/gamescores.py), from the
+    current pool version's raw projections (adjustments not applied)."""
+    pv = next((v for v in versions if v.is_current), None)
+    if pv is None:
+        return {"teams": {}, "vegas_offset": None}
+    players = [{"player_id": p.player_id, "team": p.team, "position": p.position,
+                "salary": p.salary, "projection": p.projection}
+               for p in db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()]
+    implied: dict[str, float | None] = {}
+    for g in games:
+        implied[g.home], implied[g.away] = g.home_implied, g.away_implied
+    return team_scores(players, implied)
 
 
 class IngestIn(BaseModel):

@@ -35,6 +35,27 @@ export interface PlayerProfile {
   min_games: number | null;
   features: Record<string, ProfileFeature> | null;
 }
+export interface PlayerWeek {
+  draft_group_id: number; season: number | null; week: number | null; slate_date: string | null;
+  salary: number; team: string; opponent: string; status: string | null; source: string;
+  projection: number | null; ownership: number | null; actual_own: number | null;
+  dk_points: number | null; slate_id?: number;
+}
+export interface PlayerGame {
+  season: number; week: number; team: string; opponent: string; dk_points: number;
+  box: Record<string, number>; usage: Record<string, number>;
+}
+export interface PlayerDetailDTO {
+  player: { player_id: number; name: string; position: string; team: string;
+    gsis_id: string | null; player_dk_id: number | null };
+  current: { salary: number; projection: number; floor: number; ceiling: number;
+    ownership: number; team: string; opponent: string; status: string | null;
+    implied_opp_total: number | null; value: number } | null;
+  weeks: PlayerWeek[];
+  games: PlayerGame[];
+  profile: PlayerProfile | null;
+  pct_trend: Record<string, { week: number; value: number; pct: number | null }[]>;
+}
 export interface ProfileStatus {
   season: number | null; week: number | null; profiles: number; updated_at: string | null;
 }

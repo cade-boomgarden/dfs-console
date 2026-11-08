@@ -9,10 +9,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from .api import (auth_routes, builder, builds, contests, jobs_routes,
-                  optimals as optimals_api, pool, profiles, review, slates)
+                  optimals as optimals_api, players, pool, profiles, review,
+                  salaries as salaries_api, slates)
 # job registration side effects
 from .jobs import (backup, blobgc, field, ingest, optimals,  # noqa: F401
-                   optimize, simulate)
+                   optimize, salaries, simulate)
 from .jobs import profiles as profiles_job  # noqa: F401
 from .models.db import Base, engine
 from .settings import get_settings
@@ -28,7 +29,7 @@ app.add_middleware(CORSMiddleware,
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 for r in (auth_routes, slates, pool, builder, builds, contests,
-          jobs_routes, review, profiles, optimals_api):
+          jobs_routes, review, profiles, optimals_api, salaries_api, players):
     app.include_router(r.router)
 
 
