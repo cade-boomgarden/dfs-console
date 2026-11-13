@@ -1,6 +1,10 @@
 {
-  "a": 26.144,
-  "b": 2.728,
+  "a": 18.694,
+  "b": 2.6265,
+  "all_players": {
+    "a": 26.144,
+    "b": 2.728
+  },
   "meta": {
     "seasons": [
       2022,
@@ -9,10 +13,11 @@
       2025
     ],
     "n_team_games": 2174,
-    "resid_sd": 22.63,
-    "r": 0.408,
-    "fit_date": "2026-11-07",
-    "target": "sum of QB/RB/WR/TE DK points per team-game",
+    "resid_sd": 22.16,
+    "r": 0.402,
+    "core_share_of_team": 0.888,
+    "fit_date": "2026-11-13",
+    "target": "core (QB, 2 RB, 3 WR, TE) DK points per team-game; core ranked by leave-one-out season mean DK points",
     "source": "nflverse stats_player_week + nfldata games.csv closing lines"
   }
 }

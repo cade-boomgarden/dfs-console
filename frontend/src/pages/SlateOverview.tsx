@@ -1,39 +1,49 @@
 import { useState } from "react";
 
-type GameSort = "total" | "price_edge" | "vegas_gap";
-const SORTS: { key: GameSort; label: string }[] = [
-  { key: "total", label: "O/U" }, { key: "price_edge", label: "Price edge" },
-  { key: "vegas_gap", label: "Vegas gap" },
+type GameSort = "total" | "price_edge" | "vegas_gap" | "concentration";
+const SORTS: { key: GameSort; label: string; asc?: boolean }[] = [
+  { key: "total", label: "O/U" }, { key: "price_edge", label: "Price" },
+  { key: "vegas_gap", label: "Vegas", asc: true }, { key: "concentration", label: "Conc" },
 ];
 const signed = (v: number | null | undefined) =>
   v === null || v === undefined ? "—" : `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1)}`;
+const pct = (v: number | null | undefined) =>
+  v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`;
 
 function priceTip(team: string, t: TeamScore | null) {
   if (!t) return undefined;
   return `${team} core (QB, 2 RB, 3 WR, TE, DST): $${t.core_salary.toLocaleString()} projects ` +
-    `${t.core_projection.toFixed(1)}, ${signed(t.price_edge)} pts vs the slate's projection-on-salary fit`;
+    `${t.core_projection.toFixed(1)}, ${signed(t.price_edge)} pts vs what those salaries buy on this slate`;
 }
-function vegasTip(team: string, t: TeamScore | null, offset: number | null) {
+function vegasTip(team: string, t: TeamScore | null) {
   if (!t || t.vegas_expected === null) return undefined;
-  return `${team} QB/RB/WR/TE projections sum to ${t.projection.toFixed(1)}. ` +
-    `An implied ${t.implied?.toFixed(1)} averages ${t.vegas_expected.toFixed(1)} DK pts ` +
-    `(raw gap ${signed(t.vegas_gap_raw)}; ${signed(t.vegas_gap)} after the slate offset of ${signed(offset)})`;
+  return `${team} core QB/RB/WR/TE projects ${t.offense_projection.toFixed(1)}. ` +
+    `An implied total of ${t.implied?.toFixed(1)} averages ${t.vegas_expected.toFixed(1)} DK pts for that group ` +
+    `(2022–25), so projections run ${signed(t.vegas_gap)} vs the line`;
+}
+function concTip(team: string, t: TeamScore | null) {
+  if (!t || t.concentration === null) return undefined;
+  return `${t.top2.join(" and ")} hold ${pct(t.concentration)} of ${team}'s projected receiving yards`;
 }
 
-/** One metric row on a game card: away value, home value, game sum. */
-function ScoreRow({ label, away, home, game, awayTip, homeTip }: {
+/** One metric row on a game card: away value, home value, game value.
+ *  `better` says which direction is favourable, so emphasis (ink vs dim)
+ *  marks the favourable side; null keeps every value in ink. */
+function ScoreRow({ label, away, home, game, awayTip, homeTip, better = "high", show = signed }: {
   label: string; away: number | null | undefined; home: number | null | undefined;
   game: number | null; awayTip?: string; homeTip?: string;
+  better?: "high" | "low" | null; show?: (v: number | null | undefined) => string;
 }) {
   const tone = (v: number | null | undefined) =>
-    v === null || v === undefined ? "text-[var(--mute)]" : v >= 0 ? "text-[var(--ink)]" : "text-[var(--dim)]";
+    v === null || v === undefined ? "text-[var(--mute)]"
+      : better === null || (better === "high" ? v >= 0 : v <= 0) ? "text-[var(--ink)]" : "text-[var(--dim)]";
   return (
     <div className="grid grid-cols-[1fr_auto_1fr] items-baseline gap-2 num text-[11px]">
-      <span className={tone(away)} title={awayTip}>{signed(away)}</span>
+      <span className={tone(away)} title={awayTip}>{show(away)}</span>
       <span className="text-[9px] uppercase tracking-wider text-[var(--dim)] font-[family-name:var(--font-ui)]">
-        {label} <span className={`num ${tone(game)}`}>{signed(game)}</span>
+        {label} <span className={`num ${tone(game)}`}>{show(game)}</span>
       </span>
-      <span className={`text-right ${tone(home)}`} title={homeTip}>{signed(home)}</span>
+      <span className={`text-right ${tone(home)}`} title={homeTip}>{show(home)}</span>
     </div>
   );
 }
@@ -44,18 +54,18 @@ import { Badge, Btn, num, Progress } from "../ui";
 
 interface TeamScore {
   price_edge: number; core_salary: number; core_projection: number;
-  implied: number | null; projection: number; vegas_expected: number | null;
-  vegas_gap_raw: number | null; vegas_gap: number | null;
+  implied: number | null; offense_projection: number; vegas_expected: number | null;
+  vegas_gap: number | null; concentration: number | null; top2: string[];
 }
 interface GameRow {
   id: number; home: string; away: string; total: number | null;
   home_spread: number | null; home_implied: number | null; away_implied: number | null;
   scores: { home: TeamScore | null; away: TeamScore | null;
-    price_edge: number | null; vegas_gap: number | null };
+    price_edge: number | null; vegas_gap: number | null; concentration: number | null };
 }
 interface Detail {
   id: number; name: string; draft_group_id: number; start_time: string | null;
-  vegas_offset: number | null;
+  vegas_median: number | null;
   games: GameRow[];
   pool_versions: { id: number; label: string; created_at: string; is_current: boolean;
     has_sims: boolean; n_sims: number | null }[];
@@ -78,9 +88,14 @@ export default function SlateOverview() {
   };
 
   if (!d.data) return null;
-  const key = (g: GameRow) => (sort === "total" ? g.total : g.scores[sort]) ?? -Infinity;
-  const games = [...d.data.games].sort((a, b) => key(b) - key(a));
-  const offset = d.data.vegas_offset;
+  const asc = SORTS.find((o) => o.key === sort)?.asc ?? false;
+  const key = (g: GameRow) => (sort === "total" ? g.total : g.scores[sort]) ?? null;
+  const games = [...d.data.games].sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    if (ka === null || kb === null) return ka === null ? (kb === null ? 0 : 1) : -1;   // blanks last
+    return asc ? ka - kb : kb - ka;
+  });
+  const median = d.data.vegas_median;
   return (
     <div className="space-y-6">
       <div>
@@ -118,8 +133,11 @@ export default function SlateOverview() {
                   game={g.scores.price_edge}
                   awayTip={priceTip(g.away, g.scores.away)} homeTip={priceTip(g.home, g.scores.home)} />
                 <ScoreRow label="Vegas" away={g.scores.away?.vegas_gap} home={g.scores.home?.vegas_gap}
-                  game={g.scores.vegas_gap}
-                  awayTip={vegasTip(g.away, g.scores.away, offset)} homeTip={vegasTip(g.home, g.scores.home, offset)} />
+                  game={g.scores.vegas_gap} better="low"
+                  awayTip={vegasTip(g.away, g.scores.away)} homeTip={vegasTip(g.home, g.scores.home)} />
+                <ScoreRow label="Conc" away={g.scores.away?.concentration} home={g.scores.home?.concentration}
+                  game={g.scores.concentration} better={null} show={pct}
+                  awayTip={concTip(g.away, g.scores.away)} homeTip={concTip(g.home, g.scores.home)} />
               </div>
             </div>
           ))}
@@ -127,12 +145,15 @@ export default function SlateOverview() {
         </div>
         {games.length > 0 && (
           <div className="mt-2 text-[11px] text-[var(--dim)] max-w-3xl leading-snug">
-            <span className="text-[var(--ink)]">Price</span>: points the team's core (QB, 2 RB, 3 WR, TE, DST)
-            projects above what its salaries buy on this slate. <span className="text-[var(--ink)]">Vegas</span>:
-            points the team's QB/RB/WR/TE projections sit above what its implied total averages in DK points
-            (2022–25 fit), relative to the slate median
-            {offset !== null && <> — across the slate, projections run {signed(offset)} pts per team against the line</>}.
-            Game value is the sum of both teams. Hover a number for the inputs.
+            <span className="text-[var(--ink)]">Price</span> (higher = cheaper): points the core (QB, 2 RB, 3 WR, TE, DST)
+            projects above what its salaries buy on this slate.{" "}
+            <span className="text-[var(--ink)]">Vegas</span> (lower = Vegas likes the team more than the projections do):
+            the core QB/RB/WR/TE projection minus what that group averages in DK points at the team's implied total (2022–25)
+            {median !== null && <>; slate median {signed(median)}</>}.{" "}
+            <span className="text-[var(--ink)]">Conc</span>: the top two pass catchers' share of projected receiving
+            yards; higher goes with more correlated QB stacks.{" "}
+            Game value: Price and Vegas sum both teams, Conc is the higher side. Emphasis marks the favourable direction.
+            Hover a number for the inputs.
           </div>
         )}
       </section>

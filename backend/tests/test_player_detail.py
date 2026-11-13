@@ -251,13 +251,45 @@ def test_team_scores_price_edge_and_vegas_gap():
     t = out["teams"]
     assert t["A"]["price_edge"] == 9.0 and t["D"]["price_edge"] == -9.0
     assert t["B"]["price_edge"] == 0.0
-    # projections: A 45, B 36, C 36; expected 48, 48, 40 -> raw -3, -12, -4
-    assert [t[k]["vegas_gap_raw"] for k in "ABC"] == [-3.0, -12.0, -4.0]
-    assert out["vegas_offset"] == -4.0
-    assert [t[k]["vegas_gap"] for k in "ABC"] == [1.0, -8.0, 0.0]
+    # core projections: A 45, B 36, C 36; expected 48, 48, 40 -> gaps -3, -12, -4
+    assert [t[k]["vegas_gap"] for k in "ABC"] == [-3.0, -12.0, -4.0]
+    assert out["vegas_median"] == -4.0
     assert t["D"]["vegas_gap"] is None
-    assert gamescores.game_scores(t["A"], t["B"]) == {"price_edge": 9.0, "vegas_gap": -7.0}
+    assert gamescores.game_scores(t["A"], t["B"])["price_edge"] == 9.0
+    assert gamescores.game_scores(t["A"], t["B"])["vegas_gap"] == -15.0
     assert gamescores.game_scores(t["A"], t["D"])["vegas_gap"] is None
+
+
+def test_vegas_gap_uses_only_the_core():
+    """A fourth WR and a backup QB are outside the core and must not move
+    the Vegas gap; the DST is in the core for price but not for Vegas."""
+    base = [
+        {"player_id": 1, "team": "A", "position": "QB", "salary": 7000, "projection": 20.0},
+        {"player_id": 2, "team": "A", "position": "QB", "salary": 4000, "projection": 3.0},
+        {"player_id": 3, "team": "A", "position": "WR", "salary": 7000, "projection": 15.0},
+        {"player_id": 4, "team": "A", "position": "WR", "salary": 5000, "projection": 10.0},
+        {"player_id": 5, "team": "A", "position": "WR", "salary": 4000, "projection": 8.0},
+        {"player_id": 6, "team": "A", "position": "WR", "salary": 3000, "projection": 4.0},
+        {"player_id": 7, "team": "A", "position": "DST", "salary": 3000, "projection": 7.0},
+    ]
+    t = gamescores.team_scores(base, {"A": 20.0}, coeffs={"a": 0.0, "b": 2.0})["teams"]["A"]
+    assert t["offense_projection"] == 53.0           # QB 20 + WR 15/10/8
+    assert t["vegas_gap"] == 13.0                    # 53 - 40
+
+
+def test_concentration_top2_receiving_share():
+    ps = [{"player_id": i, "name": n, "team": "A", "position": pos,
+           "salary": 5000, "projection": 10.0, "stats": {"rec_yds": y}}
+          for i, (n, pos, y) in enumerate([("W1", "WR", 90), ("W2", "WR", 60),
+                                           ("T1", "TE", 30), ("R1", "RB", 20),
+                                           ("Q", "QB", 0)])]
+    c = gamescores.concentration(ps)
+    assert c == {"share": 0.75, "top2": ["W1", "W2"]}     # 150 / 200
+    assert gamescores.concentration([ps[-1]]) is None
+    t = gamescores.team_scores(ps, {"A": 21.0}, coeffs={"a": 0.0, "b": 2.0})["teams"]["A"]
+    assert t["concentration"] == 0.75
+    g = gamescores.game_scores(t, dict(t, concentration=0.5))
+    assert g["concentration"] == 0.75
 
 
 def test_slate_detail_carries_game_scores():
@@ -265,11 +297,12 @@ def test_slate_detail_carries_game_scores():
     s = _fixture_slate(db)
     out = slate_detail(s.id, db=db, user=None)
     g = out["games"][0]
-    assert set(g["scores"]) == {"home", "away", "price_edge", "vegas_gap"}
+    assert set(g["scores"]) == {"home", "away", "price_edge", "vegas_gap", "concentration"}
+    assert 0 < g["scores"]["home"]["concentration"] <= 1
     assert g["scores"]["home"]["core_salary"] > 0
     db.close()
 
 
 def test_vegas_coeffs_file():
     c = gamescores.load_coeffs()
-    assert 15 < c["a"] < 40 and 2 < c["b"] < 3.5
+    assert 10 < c["a"] < 30 and 2 < c["b"] < 3.5

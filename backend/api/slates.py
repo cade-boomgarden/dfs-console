@@ -45,7 +45,7 @@ def slate_detail(slate_id: int, db: Session = Depends(get_db),
     return {
         "id": s.id, "name": s.name, "draft_group_id": s.draft_group_id,
         "start_time": s.start_time,
-        "vegas_offset": scores["vegas_offset"],
+        "vegas_median": scores["vegas_median"],
         "games": [{
             "id": g.id, "home": g.home, "away": g.away, "start_time": g.start_time,
             "total": g.total, "home_spread": g.home_spread,
@@ -65,13 +65,14 @@ def slate_detail(slate_id: int, db: Session = Depends(get_db),
 
 
 def _game_scores(db: Session, games: list[Game], versions: list[PoolVersion]) -> dict:
-    """Price edge and Vegas gap per team (core/gamescores.py), from the
-    current pool version's raw projections (adjustments not applied)."""
+    """Price edge, Vegas gap and concentration per team (core/gamescores.py),
+    from the current pool version's raw projections (adjustments not applied)."""
     pv = next((v for v in versions if v.is_current), None)
     if pv is None:
-        return {"teams": {}, "vegas_offset": None}
-    players = [{"player_id": p.player_id, "team": p.team, "position": p.position,
-                "salary": p.salary, "projection": p.projection}
+        return {"teams": {}, "vegas_median": None}
+    players = [{"player_id": p.player_id, "name": p.name, "team": p.team,
+                "position": p.position, "salary": p.salary,
+                "projection": p.projection, "stats": p.stats}
                for p in db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()]
     implied: dict[str, float | None] = {}
     for g in games:
