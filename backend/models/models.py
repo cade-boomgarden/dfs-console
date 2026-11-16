@@ -37,6 +37,12 @@ class Slate(Base):
     week: Mapped[int | None] = mapped_column(Integer, nullable=True)
     start_time: Mapped[str | None] = mapped_column(String(64), nullable=True)  # ISO UTC
     game_count: Mapped[int] = mapped_column(Integer, default=0)
+    # "classic" | "showdown". Showdown: one game, 1 CPT (1.5x salary and
+    # points) + 5 FLEX, kickers in the pool.
+    slate_type: Mapped[str] = mapped_column(String(16), default="classic",
+                                            server_default="classic")
+    # showdown: {"CPT": rosterSlotId, "FLEX": rosterSlotId} for export
+    roster_slots: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     games: Mapped[list["Game"]] = relationship(back_populates="slate")
@@ -133,6 +139,9 @@ class PoolPlayer(Base):
     stats: Mapped[dict] = mapped_column(JSON, default=dict)          # FP stat line
     draftable_ids: Mapped[dict] = mapped_column(JSON, default=dict)  # rosterSlotId -> draftableId
     sim_col: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # showdown only: captain-slot salary and ownership (null on classic)
+    cpt_salary: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cpt_ownership: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 class Adjustment(Base):

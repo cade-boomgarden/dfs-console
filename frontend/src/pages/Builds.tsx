@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, ContestRow, Job, watchJob } from "../api";
-import { MODEL_DEFAULT, ShapeAllocation } from "../components/ShapeAllocation";
+import { MODEL_DEFAULT, ShapeAllocation, SPLIT_DEFAULT,
+  SplitAllocation } from "../components/ShapeAllocation";
 import { SkeletonBrowser } from "../components/SkeletonBrowser";
 import { Badge, Btn, Field, num, Progress } from "../ui";
 
@@ -27,6 +28,16 @@ export default function Builds() {
     RB: "", WR: "", TE: "",
   });
   const [contestId, setContestId] = useState<number | null>(null);
+  const showdown = slate.data?.slate_type === "showdown";
+  // Showdown: a 6-man roster from one game. Max overlap 5 = unique lineups
+  // only; no exposure cap by default (a one-game pool's chalk QBs sit in most
+  // candidates, so a 0.5-0.6 cap starves Stage B); the repeat cap is per captain.
+  useEffect(() => {
+    if (!showdown) return;
+    setCfg((c) => ({ ...c, max_overlap: 5, global_max_exposure: 1,
+                     max_repeat_qb: 30, min_projection: 1 }));
+    setShapes({ ...SPLIT_DEFAULT });
+  }, [showdown]);
   const [sweepJob, setSweepJob] = useState<Job | null>(null);
   const [sweepBlocks, setSweepBlocks] = useState("10,20,30,50,80");
   const [gameWeights, setGameWeights] = useState<Record<string, number>>({});
@@ -50,7 +61,7 @@ export default function Builds() {
         game_weights: Object.fromEntries(
           Object.entries(gameWeights).filter(([, v]) => v !== 1)),
         skeleton_exclude: excluded,
-        position_limits: Object.fromEntries(
+        position_limits: showdown ? {} : Object.fromEntries(
           Object.entries(posLimits).filter(([, v]) => v !== "" && Number(v) > 0)),
       },
     });
@@ -95,11 +106,16 @@ export default function Builds() {
           <Field label="Sim block"><input type="number" value={cfg.sim_block} onChange={set("sim_block")} /></Field>
           <Field label="Max overlap"><input type="number" value={cfg.max_overlap} onChange={set("max_overlap")} /></Field>
           <Field label="Max exposure"><input type="number" step={0.05} value={cfg.global_max_exposure} onChange={set("global_max_exposure")} /></Field>
-          <Field label="Max repeat QB"><input type="number" value={cfg.max_repeat_qb} onChange={set("max_repeat_qb")} /></Field>
+          <Field label={showdown ? "Max repeat CPT" : "Max repeat QB"}>
+            <input type="number" value={cfg.max_repeat_qb} onChange={set("max_repeat_qb")} />
+          </Field>
           <Field label="Min proj"><input type="number" value={cfg.min_projection} onChange={set("min_projection")} /></Field>
         </div>
         <div className="border-t hairline pt-3">
-          <ShapeAllocation value={shapes} onChange={setShapes} />
+          {showdown
+            ? <SplitAllocation value={shapes} onChange={setShapes} />
+            : <ShapeAllocation value={shapes} onChange={setShapes} />}
+          {!showdown && (
           <div className="mt-3 flex items-end gap-4 flex-wrap">
             <div className="flex items-end gap-2">
               <span className="eyebrow pb-1">Max per position</span>
@@ -116,13 +132,16 @@ export default function Builds() {
               </span>
             </div>
           </div>
+          )}
           <div className="mt-2 flex items-center gap-2">
+            {!showdown && (<>
             <span className="eyebrow">DST with QB</span>
             <input type="number" step={0.05} min={0} className="w-20"
               value={dstWithQb} onChange={(e) => setDstWithQb(Number(e.target.value))} />
             <span className="text-[10px] text-[var(--dim)]">
               multiplier applied when the DST is the QB's own team — 0 excludes it
             </span>
+            </>)}
             <span className="ml-auto flex items-center gap-2">
               <span className="eyebrow">Contest</span>
               <select value={contestId ?? ""}
@@ -147,7 +166,8 @@ export default function Builds() {
         </div>
 
         <div className="flex items-end gap-3">
-          <Field label="Label"><input value={cfg.label} onChange={set("label")} placeholder="Sunday main 150-max" className="w-64" /></Field>
+          <Field label="Label"><input value={cfg.label} onChange={set("label")}
+            placeholder={showdown ? "Monday showdown 150-max" : "Sunday main 150-max"} className="w-64" /></Field>
           <Btn kind="primary" onClick={run} disabled={!pv?.has_sims || (job !== null && job.status === "running")}>
             Run build
           </Btn>

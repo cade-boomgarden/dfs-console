@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { api, Job, watchJob } from "../api";
 import { Badge, Btn, Field, money, num, Progress } from "../ui";
+import OptimalsShowdown from "./OptimalsShowdown";
 
 /** Construction optimals: the top X lineups for each roster construction
  *  (QB x stack x bringbacks x DST x salary shape), under mean, median and
@@ -21,7 +22,7 @@ interface RunResult {
            ms_per_solve_any: number | null; ms_per_solve_band: number | null };
 }
 interface Options {
-  pool_version_id: number; has_sims: boolean; qbs: QB[];
+  pool_version_id: number; has_sims: boolean; qbs: QB[]; showdown?: boolean;
   ms_per_solve: { any: number; band: number }; max_seconds: number;
   latest: { job_id: number; finished_at: string; result: RunResult;
             stale: string | null; available: boolean } | null;
@@ -193,6 +194,7 @@ export default function Optimals() {
   if (!opts.data) return opts.isError
     ? <div className="text-[var(--dim)]">{(opts.error as Error).message}</div> : null;
   const o = opts.data;
+  if (o.showdown) return <OptimalsShowdown slateId={slateId!} />;
   const latest = o.latest;
   const res = latest?.result;
 

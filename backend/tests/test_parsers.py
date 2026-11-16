@@ -49,7 +49,8 @@ def test_parse_contest_detail_payout_curve():
 def test_fp_projections_positions():
     players = fp.parse_projections(load("fp_projections.json"))
     positions = {p["position"] for p in players}
-    assert positions == {"QB", "RB", "WR", "TE", "DST"}  # K filtered out
+    # K is kept for Showdown pools; ingest drops it on Classic slates
+    assert positions == {"QB", "RB", "WR", "TE", "DST", "K"}
     hurts = next(p for p in players if p["name"] == "Jalen Hurts")
     assert hurts["stats"]["pass_yds"] > 100
 

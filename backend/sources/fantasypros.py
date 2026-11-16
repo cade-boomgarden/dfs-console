@@ -11,7 +11,9 @@ import httpx
 
 API = "https://api.fantasypros.com/public/v2/json/nfl/{season}/projections"
 
-KEEP_POSITIONS = {"QB", "RB", "WR", "TE", "DST"}
+# K is kept for Showdown pools (DK Classic has no kicker); ingest drops it
+# on Classic slates.
+KEEP_POSITIONS = {"QB", "RB", "WR", "TE", "DST", "K"}
 
 
 def parse_projections(payload: dict[str, Any]) -> list[dict[str, Any]]:

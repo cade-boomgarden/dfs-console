@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from ..core.showdown import CPT_MULT, cpt_id
 from ..core.solver import Player, Position
 from ..models.models import (Adjustment, PlayerCanonical, PoolPlayer, PoolVersion,
                              ProfileSnapshot)
@@ -28,6 +29,10 @@ def to_core_players(
     pool: list[PoolPlayer],
     adjustments: dict[int, dict] | None = None,
 ) -> tuple[list[Player], dict[str, PoolPlayer]]:
+    """Core Player objects for a pool version. A Showdown pool (rows carry a
+    captain salary) yields two entries per player -- FLEX (id = player id)
+    and captain (id = "c" + player id, 1.5x salary and points, captain
+    ownership) -- and `by_id` maps both entry ids to the row."""
     adjustments = adjustments or {}
     players, by_id = [], {}
     for pp in pool:
@@ -37,15 +42,41 @@ def to_core_players(
         proj = pp.projection * float(adj.get("multiplier", 1.0)) + float(adj.get("delta", 0.0))
         own = float(adj.get("ownership", pp.ownership))
         pid = str(pp.player_id)
+        showdown = pp.cpt_salary is not None
         p = Player(
             id=pid, name=pp.name, position=Position(pp.position),
             team=pp.team, opponent=pp.opponent, game_id=pp.game_key,
             salary=pp.salary, projection=round(max(proj, 0.0), 2),
             ceiling=pp.ceiling, floor=pp.floor, stddev=pp.stddev, ownership=own,
+            slot_role="FLEX" if showdown else "",
         )
         players.append(p)
         by_id[pid] = pp
+        if showdown:
+            m = CPT_MULT
+            cid = cpt_id(pid)
+            players.append(Player(
+                id=cid, name=pp.name, position=Position(pp.position),
+                team=pp.team, opponent=pp.opponent, game_id=pp.game_key,
+                salary=pp.cpt_salary, projection=round(max(proj, 0.0) * m, 2),
+                ceiling=(pp.ceiling or 0.0) * m, floor=(pp.floor or 0.0) * m,
+                stddev=(pp.stddev or 0.0) * m,
+                ownership=float(adj.get("cpt_ownership", pp.cpt_ownership or 0.0)),
+                slot_role="CPT", base_id=pid,
+            ))
+            by_id[cid] = pp
     return players, by_id
+
+
+def role_mult(p: Player) -> float:
+    """Points multiplier of an entry relative to its pool row."""
+    return CPT_MULT if p.slot_role == "CPT" else 1.0
+
+
+def is_showdown_slate(db: Session, slate_id: int) -> bool:
+    from ..models.models import Slate
+    s = db.get(Slate, slate_id)
+    return bool(s and s.slate_type == "showdown")
 
 
 def locked_and_excluded(adjustments: dict[int, dict]) -> tuple[frozenset[str], frozenset[str]]:

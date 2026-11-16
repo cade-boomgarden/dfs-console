@@ -49,8 +49,8 @@ function ScoreRow({ label, away, home, game, awayTip, homeTip, better = "high", 
 }
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
-import { api, watchJob } from "../api";
-import { Badge, Btn, num, Progress } from "../ui";
+import { api, PoolPlayer, watchJob } from "../api";
+import { Badge, Btn, money, num, Progress } from "../ui";
 
 interface TeamScore {
   price_edge: number; core_salary: number; core_projection: number;
@@ -65,6 +65,7 @@ interface GameRow {
 }
 interface Detail {
   id: number; name: string; draft_group_id: number; start_time: string | null;
+  slate_type?: "classic" | "showdown";
   vegas_median: number | null;
   games: GameRow[];
   pool_versions: { id: number; label: string; created_at: string; is_current: boolean;
@@ -78,6 +79,9 @@ export default function SlateOverview() {
     queryFn: () => api.get<Detail>(`/api/slates/${slateId}`) });
   const [job, setJob] = useState<{ progress: number; message: string; status: string } | null>(null);
   const [sort, setSort] = useState<GameSort>("total");
+  const showdown = d.data?.slate_type === "showdown";
+  const pool = useQuery({ queryKey: ["pool", slateId], enabled: showdown,
+    queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
 
   const simulate = async (pvId: number) => {
     const { job_id } = await api.post<{ job_id: number }>("/api/slates/simulate", { pool_version_id: pvId });
@@ -99,7 +103,9 @@ export default function SlateOverview() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-lg font-semibold">{d.data.name}</h1>
+        <h1 className="text-lg font-semibold flex items-center gap-2">
+          {d.data.name}{showdown && <Badge tone="amber">Showdown</Badge>}
+        </h1>
         <div className="text-[var(--dim)] text-xs num">DG {d.data.draft_group_id} · {d.data.start_time ?? ""}</div>
       </div>
       {job && job.status !== "done" && <Progress value={job.progress} message={job.message} />}
@@ -107,7 +113,7 @@ export default function SlateOverview() {
       <section>
         <div className="flex items-center gap-3 mb-2">
           <h2 className="eyebrow">Games — implied totals</h2>
-          <div className="ml-auto flex items-center gap-1">
+          {!showdown && <div className="ml-auto flex items-center gap-1">
             <span className="eyebrow mr-1">Sort</span>
             {SORTS.map((o) => (
               <button key={o.key} onClick={() => setSort(o.key)} aria-pressed={sort === o.key}
@@ -115,7 +121,7 @@ export default function SlateOverview() {
                 {o.label}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           {games.map((g) => (
@@ -128,7 +134,7 @@ export default function SlateOverview() {
                 <span>{g.away} <span className="text-[var(--up)]">{num(g.away_implied)}</span></span>
                 <span>{g.home} <span className="text-[var(--up)]">{num(g.home_implied)}</span></span>
               </div>
-              <div className="mt-2 pt-1.5 border-t hairline space-y-0.5">
+              {!showdown && <div className="mt-2 pt-1.5 border-t hairline space-y-0.5">
                 <ScoreRow label="Price" away={g.scores.away?.price_edge} home={g.scores.home?.price_edge}
                   game={g.scores.price_edge}
                   awayTip={priceTip(g.away, g.scores.away)} homeTip={priceTip(g.home, g.scores.home)} />
@@ -138,12 +144,12 @@ export default function SlateOverview() {
                 <ScoreRow label="Conc" away={g.scores.away?.concentration} home={g.scores.home?.concentration}
                   game={g.scores.concentration} better={null} show={pct}
                   awayTip={concTip(g.away, g.scores.away)} homeTip={concTip(g.home, g.scores.home)} />
-              </div>
+              </div>}
             </div>
           ))}
           {games.length === 0 && <div className="text-[var(--dim)]">No games — ingest first.</div>}
         </div>
-        {games.length > 0 && (
+        {games.length > 0 && !showdown && (
           <div className="mt-2 text-[11px] text-[var(--dim)] max-w-3xl leading-snug">
             <span className="text-[var(--ink)]">Price</span> (higher = cheaper): points the core (QB, 2 RB, 3 WR, TE, DST)
             projects above what its salaries buy on this slate.{" "}
@@ -157,6 +163,8 @@ export default function SlateOverview() {
           </div>
         )}
       </section>
+
+      {showdown && <CaptainBoard players={pool.data?.players ?? []} hasSims={!!pool.data?.has_sims} />}
 
       <section>
         <h2 className="eyebrow mb-2">Pool versions</h2>
@@ -177,5 +185,64 @@ export default function SlateOverview() {
         </div>
       </section>
     </div>
+  );
+}
+
+
+/** Showdown: the captain candidates. Captain points are 1.5x the player's
+ *  sims; value is captain points per $1K of captain salary. */
+function CaptainBoard({ players, hasSims }: { players: PoolPlayer[]; hasSims: boolean }) {
+  const [by, setBy] = useState<"ceiling" | "projection" | "value">("ceiling");
+  const rows = players
+    .filter((p) => p.projection > 0 && p.cpt_salary)
+    .map((p) => ({
+      p, proj: p.projection * 1.5, ceil: p.ceiling * 1.5,
+      value: (p.projection * 1.5) / ((p.cpt_salary ?? 1) / 1000),
+    }))
+    .sort((a, b) => (by === "value" ? b.value - a.value
+      : by === "projection" ? b.proj - a.proj : b.ceil - a.ceil))
+    .slice(0, 15);
+  return (
+    <section>
+      <div className="flex items-center gap-3 mb-2">
+        <h2 className="eyebrow">Captain board</h2>
+        {!hasSims && <span className="text-[11px] text-[var(--dim)]">Ceilings appear after Simulate.</span>}
+        <div className="ml-auto flex items-center gap-1">
+          <span className="eyebrow mr-1">Sort</span>
+          {(["ceiling", "projection", "value"] as const).map((k) => (
+            <button key={k} onClick={() => setBy(k)} aria-pressed={by === k}
+              className={`px-2 py-0.5 rounded text-[11px] ${by === k ? "bg-[var(--raised)] text-[var(--ink)]" : "text-[var(--dim)] hover:text-[var(--ink)]"}`}>
+              {{ ceiling: "Ceil", projection: "Proj", value: "Value" }[k]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="panel overflow-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b hairline">
+              {["Player", "Pos", "Tm", "CPT $", "CPT proj", "CPT ceil", "Pts/$1K", "CPT own%", "FLEX own%"].map((h) => (
+                <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ p, proj, ceil, value }) => (
+              <tr key={p.player_id} className="border-b hairline">
+                <td className="px-2 py-1">{p.name}</td>
+                <td className="px-2 py-1 text-[var(--dim)]">{p.position}</td>
+                <td className="px-2 py-1">{p.team}</td>
+                <td className="px-2 py-1 num">{money(p.cpt_salary ?? 0)}</td>
+                <td className="px-2 py-1 num">{num(proj)}</td>
+                <td className="px-2 py-1 num text-[var(--up)]">{hasSims ? num(ceil) : "—"}</td>
+                <td className="px-2 py-1 num">{num(value, 2)}</td>
+                <td className="px-2 py-1 num">{num(p.cpt_ownership)}</td>
+                <td className="px-2 py-1 num text-[var(--dim)]">{num(p.ownership)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }

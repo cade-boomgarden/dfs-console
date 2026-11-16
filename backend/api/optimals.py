@@ -12,7 +12,7 @@ from ..auth.security import current_user
 from ..jobs import simscache
 from ..jobs.optimals import (DEFAULT_MS, MAX_SECONDS, adjustments_token,
                              validate_config)
-from ..jobs.poolutil import load_adjustments
+from ..jobs.poolutil import is_showdown_slate, load_adjustments
 from ..jobs.runner import enqueue
 from ..models.db import get_db
 from ..models.models import Job, PoolPlayer, User
@@ -80,8 +80,19 @@ def options(slate_id: int, db: Session = Depends(get_db),
                   "stale": _stale(res, pv.id, adj_tok),
                   "available": simscache.blob_store().exists(res.get("blob_key", ""))}
     running = _jobs(db, slate_id, ("queued", "running"))
+    showdown = is_showdown_slate(db, slate_id)
+    captains = []
+    if showdown:
+        for p in (db.query(PoolPlayer).filter_by(pool_version_id=pv.id)
+                  .order_by(PoolPlayer.projection.desc()).all()):
+            captains.append({"id": p.player_id, "name": p.name, "pos": p.position,
+                             "team": p.team, "opp": p.opponent,
+                             "salary": p.cpt_salary, "projection": p.projection,
+                             "ownership": p.cpt_ownership})
     return {
         "pool_version_id": pv.id,
+        "showdown": showdown,
+        "captains": captains,
         "has_sims": bool(pv.sims_blob_key),
         "qbs": qb_out,
         "ms_per_solve": _rates(db, slate_id),
@@ -92,10 +103,13 @@ def options(slate_id: int, db: Session = Depends(get_db),
 
 
 class RunIn(BaseModel):
-    qb_ids: list[int]
-    teammates: list[int]
-    bringbacks: list[int]
-    dst: list[bool]
+    qb_ids: list[int] = []
+    teammates: list[int] = []
+    bringbacks: list[int] = []
+    dst: list[bool] = []
+    # Showdown: captains x captain-team counts (1-5) replace the QB axes
+    cpt_ids: list[int] | None = None
+    splits: list[int] | None = None
     shapes: list[str]
     top_x: int = 10
     min_diff: int = 1
@@ -111,8 +125,16 @@ def run(slate_id: int, body: RunIn, db: Session = Depends(get_db),
                                  "lineup stats come from the sims matrix.")
     if _jobs(db, slate_id, ("queued", "running")):
         raise HTTPException(409, "An optimals run is already going for this slate.")
+    raw = body.model_dump()
+    if is_showdown_slate(db, slate_id):
+        raw = {k: raw[k] for k in ("cpt_ids", "splits", "shapes", "top_x",
+                                   "min_diff", "use_adjustments")}
+        raw["cpt_ids"] = raw["cpt_ids"] or []
+    else:
+        raw.pop("cpt_ids", None)
+        raw.pop("splits", None)
     try:
-        cfg = validate_config(body.model_dump(), _rates(db, slate_id))
+        cfg = validate_config(raw, _rates(db, slate_id))
     except ValueError as e:
         raise HTTPException(400, str(e))
     job_id = enqueue("optimals", {"slate_id": slate_id, "pool_version_id": pv.id,

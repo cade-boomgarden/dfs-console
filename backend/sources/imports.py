@@ -11,6 +11,8 @@ import re
 from typing import Any
 
 SLOT_ORDER = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"]
+SHOWDOWN_SLOT_ORDER = ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"]
+_KNOWN_SLOTS = {"QB", "RB", "WR", "TE", "FLEX", "DST", "CPT"}
 _NAME_ID = re.compile(r"^(.*?)\s*\((\d+)\)\s*$")
 
 
@@ -24,12 +26,13 @@ def parse_dkentries(text: str) -> list[dict[str, Any]]:
     header = next(reader, None)
     if not header:
         return []
+    order = slot_order(header)
     out = []
     for row in reader:
         if len(row) < 4 or not row[0].strip().isdigit():
             continue
         slots = []
-        for i, slot in enumerate(SLOT_ORDER):
+        for i, slot in enumerate(order):
             cell = row[4 + i].strip() if len(row) > 4 + i else ""
             if not cell:
                 slots.append({"slot": slot, "name": None, "draftable_id": None})
@@ -51,7 +54,23 @@ def parse_dkentries(text: str) -> list[dict[str, Any]]:
     return out
 
 
-def export_dkentries(entries: list[dict[str, Any]]) -> str:
+def slot_order(header: list[str]) -> list[str]:
+    """Lineup columns of a DKEntries header: the slot names after the four
+    entry columns, up to the first blank (Classic QB..DST, Showdown
+    CPT + 5 FLEX). Falls back to Classic for an unrecognised header."""
+    cols = []
+    for h in header[4:]:
+        h = h.strip()
+        if not h:
+            break
+        cols.append(h)
+    if cols and all(c in _KNOWN_SLOTS for c in cols):
+        return cols
+    return list(SLOT_ORDER)
+
+
+def export_dkentries(entries: list[dict[str, Any]],
+                     slot_header: list[str] | None = None) -> str:
     """Write a DKEntries upload CSV.
 
     Each entry: {entry_id, contest_name, contest_id, entry_fee,
@@ -65,7 +84,7 @@ def export_dkentries(entries: list[dict[str, Any]]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf, lineterminator="\r\n")
     w.writerow(["Entry ID", "Contest Name", "Contest ID", "Entry Fee",
-                "QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"])
+                *(slot_header or SLOT_ORDER)])
     for e in entries:
         cells = []
         for s in e["slots"]:
@@ -111,13 +130,13 @@ def parse_standings(text: str) -> dict[str, Any]:
 
 def parse_standings_lineup(lineup: str) -> list[dict[str, str]]:
     """Split a standings 'Lineup' string into (slot, name) pairs."""
-    tokens = re.split(r"\b(QB|RB|WR|TE|FLEX|DST)\b", lineup)
+    tokens = re.split(r"\b(CPT|QB|RB|WR|TE|FLEX|DST)\b", lineup)
     out, slot = [], None
     for t in tokens:
         t = t.strip()
         if not t:
             continue
-        if t in {"QB", "RB", "WR", "TE", "FLEX", "DST"}:
+        if t in _KNOWN_SLOTS:
             slot = t
         elif slot:
             out.append({"slot": slot, "name": t})

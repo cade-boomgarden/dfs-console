@@ -100,12 +100,26 @@ def parse_draftables(payload: dict[str, Any]) -> dict[str, Any]:
             "dvp_rank": None,
         })
         rec["draftable_ids"][str(d.get("rosterSlotId"))] = d.get("draftableId")
+        rec.setdefault("slot_salaries", {})[str(d.get("rosterSlotId"))] = d.get("salary", 0)
         for attr in d.get("draftStatAttributes", []):
             if attr.get("id") == -2:
                 try:
                     rec["dvp_rank"] = int(attr.get("sortValue"))
                 except (TypeError, ValueError):
                     pass
+
+    slate_type, roster_slots = _showdown_slots(players.values())
+    for rec in players.values():
+        sal = rec.pop("slot_salaries", {})
+        rec["cpt_salary"] = None
+        if roster_slots:
+            # DK prices the captain at 1.5x; the base salary is the FLEX one
+            flex = sal.get(str(roster_slots["FLEX"]))
+            cpt = sal.get(str(roster_slots["CPT"]))
+            if flex is not None:
+                rec["salary"] = flex
+            rec["cpt_salary"] = cpt if cpt is not None else (
+                int(round(rec["salary"] * 1.5)) if flex is not None else None)
 
     games = []
     for c in payload.get("competitions", []):
@@ -116,7 +130,38 @@ def parse_draftables(payload: dict[str, Any]) -> dict[str, Any]:
             "start_time": c.get("startTime", ""),
             "name": c.get("name", ""),
         })
-    return {"players": list(players.values()), "games": games}
+    return {"players": list(players.values()), "games": games,
+            "slate_type": slate_type, "roster_slots": roster_slots}
+
+
+def _showdown_slots(players) -> tuple[str, dict | None]:
+    """("showdown", {"CPT": id, "FLEX": id}) for a Showdown draft group, else
+    ("classic", None).
+
+    Showdown is recognised structurally, not by slot id (ids are reused
+    across sports and eras -- 511/512 in 2020-21 and again in 2026): a single
+    game, kickers in the pool, and exactly two roster slots that every
+    priced player holds. The captain slot is the one priced higher (1.5x)."""
+    players = list(players)
+    if not players:
+        return "classic", None
+    slot_sets = {frozenset(p.get("slot_salaries", {})) for p in players}
+    slots = set().union(*slot_sets)
+    games = {p.get("competition_id") for p in players}
+    has_k = any(p.get("position") == "K" for p in players)
+    if len(slots) != 2 or len(games) != 1 or not has_k:
+        return "classic", None
+    a, b = sorted(slots)
+    votes = {a: 0, b: 0}
+    for p in players:
+        sal = p.get("slot_salaries", {})
+        if a in sal and b in sal and sal[a] != sal[b]:
+            votes[a if sal[a] > sal[b] else b] += 1
+    if votes[a] == votes[b]:
+        return "classic", None
+    cpt = a if votes[a] > votes[b] else b
+    flex = b if cpt == a else a
+    return "showdown", {"CPT": int(cpt), "FLEX": int(flex)}
 
 
 # --- contest detail (section 15i): full payout curve -------------------------

@@ -1,0 +1,116 @@
+Entry ID,Contest Name,Contest ID,Entry Fee,CPT,FLEX,FLEX,FLEX,FLEX,FLEX,,Instructions
+5342641303,NFL Showdown $50K First Down [20 Entry Max] (LAC @ BAL),197774374,$1,,,,,,,,1. Column A lists all of your contest entries for this draftgroup
+,,,,,,,,,,,2. Your current lineup is listed next to each entry (blank for reservations)
+,,,,,,,,,,,3. You can change the lineup for an entry by entering the IDs of the players in the row next to that entry
+,,,,,,,,,,,4. Use data from the Name+ID column or the ID column; you cannot use just the player's name
+,,,,,,,,,,,5. For faster processing only include entries you are changing in the file you upload
+,,,,,,,,,,,
+,,,,,,,,,,,Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
+,,,,,,,,,,,WR,Zay Flowers (44904797),Zay Flowers,44904797,CPT,15600,LAC@BAL 11/16/2026 08:15PM ET,BAL,17.06
+,,,,,,,,,,,RB,Derrick Henry (44904798),Derrick Henry,44904798,CPT,15000,LAC@BAL 11/16/2026 08:15PM ET,BAL,16.59
+,,,,,,,,,,,QB,Jacoby Brissett (44904799),Jacoby Brissett,44904799,CPT,13800,LAC@BAL 11/16/2026 08:15PM ET,BAL,14.77
+,,,,,,,,,,,QB,Justin Herbert (44904800),Justin Herbert,44904800,CPT,13500,LAC@BAL 11/16/2026 08:15PM ET,LAC,11.70
+,,,,,,,,,,,WR,Ladd McConkey (44904801),Ladd McConkey,44904801,CPT,12600,LAC@BAL 11/16/2026 08:15PM ET,LAC,8.6
+,,,,,,,,,,,QB,Joe Fagnano (44904802),Joe Fagnano,44904802,CPT,12300,LAC@BAL 11/16/2026 08:15PM ET,BAL,1.82
+,,,,,,,,,,,QB,DJ Uiagalelei (44904803),DJ Uiagalelei,44904803,CPT,12000,LAC@BAL 11/16/2026 08:15PM ET,LAC,4.96
+,,,,,,,,,,,RB,Omarion Hampton (44904804),Omarion Hampton,44904804,CPT,11700,LAC@BAL 11/16/2026 08:15PM ET,LAC,8.78
+,,,,,,,,,,,WR,Quentin Johnston (44904805),Quentin Johnston,44904805,CPT,11100,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.54
+,,,,,,,,,,,WR,Zay Flowers (44904743),Zay Flowers,44904743,FLEX,10400,LAC@BAL 11/16/2026 08:15PM ET,BAL,17.06
+,,,,,,,,,,,WR,Tre' Harris (44904806),Tre' Harris,44904806,CPT,10200,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.74
+,,,,,,,,,,,RB,Derrick Henry (44904744),Derrick Henry,44904744,FLEX,10000,LAC@BAL 11/16/2026 08:15PM ET,BAL,16.59
+,,,,,,,,,,,TE,Mark Andrews (44904807),Mark Andrews,44904807,CPT,9600,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.63
+,,,,,,,,,,,QB,Jacoby Brissett (44904745),Jacoby Brissett,44904745,FLEX,9200,LAC@BAL 11/16/2026 08:15PM ET,BAL,14.77
+,,,,,,,,,,,QB,Justin Herbert (44904746),Justin Herbert,44904746,FLEX,9000,LAC@BAL 11/16/2026 08:15PM ET,LAC,11.70
+,,,,,,,,,,,QB,Trey Lance (44904808),Trey Lance,44904808,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,QB,Lamar Jackson (44904809),Lamar Jackson,44904809,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,BAL,16.82
+,,,,,,,,,,,QB,Tyler Huntley (44904810),Tyler Huntley,44904810,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,BAL,11.34
+,,,,,,,,,,,QB,Skylar Thompson (44904811),Skylar Thompson,44904811,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,QB,Jake Browning (44904812),Jake Browning,44904812,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,QB,Kedon Slovis (44904813),Kedon Slovis,44904813,CPT,9000,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,RB,Kimani Vidal (44904814),Kimani Vidal,44904814,CPT,8700,LAC@BAL 11/16/2026 08:15PM ET,LAC,5.48
+,,,,,,,,,,,WR,Ladd McConkey (44904747),Ladd McConkey,44904747,FLEX,8400,LAC@BAL 11/16/2026 08:15PM ET,LAC,8.6
+,,,,,,,,,,,QB,Joe Fagnano (44904748),Joe Fagnano,44904748,FLEX,8200,LAC@BAL 11/16/2026 08:15PM ET,BAL,1.82
+,,,,,,,,,,,K,Cameron Dicker (44904815),Cameron Dicker,44904815,CPT,8100,LAC@BAL 11/16/2026 08:15PM ET,LAC,7.75
+,,,,,,,,,,,QB,DJ Uiagalelei (44904749),DJ Uiagalelei,44904749,FLEX,8000,LAC@BAL 11/16/2026 08:15PM ET,LAC,4.96
+,,,,,,,,,,,RB,Omarion Hampton (44904750),Omarion Hampton,44904750,FLEX,7800,LAC@BAL 11/16/2026 08:15PM ET,LAC,8.78
+,,,,,,,,,,,RB,Justice Hill (44904816),Justice Hill,44904816,CPT,7500,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.79
+,,,,,,,,,,,WR,Quentin Johnston (44904751),Quentin Johnston,44904751,FLEX,7400,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.54
+,,,,,,,,,,,RB,Keaton Mitchell (44904817),Keaton Mitchell,44904817,CPT,7200,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.39
+,,,,,,,,,,,K,Riley Patterson (44904818),Riley Patterson,44904818,CPT,6900,LAC@BAL 11/16/2026 08:15PM ET,BAL,5.4
+,,,,,,,,,,,K,Tyler Loop (44904819),Tyler Loop,44904819,CPT,6900,LAC@BAL 11/16/2026 08:15PM ET,BAL,8.62
+,,,,,,,,,,,K,Harrison Mevis (44904820),Harrison Mevis,44904820,CPT,6900,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.4
+,,,,,,,,,,,WR,Tre' Harris (44904752),Tre' Harris,44904752,FLEX,6800,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.74
+,,,,,,,,,,,WR,Ja'Kobi Lane (44904821),Ja'Kobi Lane,44904821,CPT,6600,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.58
+,,,,,,,,,,,TE,Mark Andrews (44904753),Mark Andrews,44904753,FLEX,6400,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.63
+,,,,,,,,,,,QB,Trey Lance (44904754),Trey Lance,44904754,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,QB,Lamar Jackson (44904755),Lamar Jackson,44904755,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,BAL,16.82
+,,,,,,,,,,,QB,Tyler Huntley (44904756),Tyler Huntley,44904756,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,BAL,11.34
+,,,,,,,,,,,QB,Skylar Thompson (44904757),Skylar Thompson,44904757,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,QB,Jake Browning (44904758),Jake Browning,44904758,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,QB,Kedon Slovis (44904759),Kedon Slovis,44904759,FLEX,6000,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,DST,Ravens  (44904822),Ravens ,44904822,CPT,6000,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.67
+,,,,,,,,,,,RB,Kimani Vidal (44904760),Kimani Vidal,44904760,FLEX,5800,LAC@BAL 11/16/2026 08:15PM ET,LAC,5.48
+,,,,,,,,,,,WR,Rashod Bateman (44904823),Rashod Bateman,44904823,CPT,5700,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.16
+,,,,,,,,,,,K,Cameron Dicker (44904761),Cameron Dicker,44904761,FLEX,5400,LAC@BAL 11/16/2026 08:15PM ET,LAC,7.75
+,,,,,,,,,,,DST,Chargers  (44904824),Chargers ,44904824,CPT,5100,LAC@BAL 11/16/2026 08:15PM ET,LAC,4
+,,,,,,,,,,,RB,Justice Hill (44904762),Justice Hill,44904762,FLEX,5000,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.79
+,,,,,,,,,,,RB,Keaton Mitchell (44904763),Keaton Mitchell,44904763,FLEX,4800,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.39
+,,,,,,,,,,,K,Riley Patterson (44904764),Riley Patterson,44904764,FLEX,4600,LAC@BAL 11/16/2026 08:15PM ET,BAL,5.4
+,,,,,,,,,,,K,Tyler Loop (44904765),Tyler Loop,44904765,FLEX,4600,LAC@BAL 11/16/2026 08:15PM ET,BAL,8.62
+,,,,,,,,,,,K,Harrison Mevis (44904766),Harrison Mevis,44904766,FLEX,4600,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.4
+,,,,,,,,,,,TE,Oronde Gadsden II (44904825),Oronde Gadsden II,44904825,CPT,4500,LAC@BAL 11/16/2026 08:15PM ET,LAC,5.3
+,,,,,,,,,,,WR,Ja'Kobi Lane (44904767),Ja'Kobi Lane,44904767,FLEX,4400,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.58
+,,,,,,,,,,,DST,Ravens  (44904768),Ravens ,44904768,FLEX,4000,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.67
+,,,,,,,,,,,TE,Charlie Kolar (44904826),Charlie Kolar,44904826,CPT,3900,LAC@BAL 11/16/2026 08:15PM ET,LAC,4.2
+,,,,,,,,,,,WR,Rashod Bateman (44904769),Rashod Bateman,44904769,FLEX,3800,LAC@BAL 11/16/2026 08:15PM ET,BAL,6.16
+,,,,,,,,,,,TE,David Njoku (44904827),David Njoku,44904827,CPT,3600,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.35
+,,,,,,,,,,,DST,Chargers  (44904770),Chargers ,44904770,FLEX,3400,LAC@BAL 11/16/2026 08:15PM ET,LAC,4
+,,,,,,,,,,,TE,Oronde Gadsden II (44904771),Oronde Gadsden II,44904771,FLEX,3000,LAC@BAL 11/16/2026 08:15PM ET,LAC,5.3
+,,,,,,,,,,,WR,KeAndre Lambert-Smith (44904828),KeAndre Lambert-Smith,44904828,CPT,3000,LAC@BAL 11/16/2026 08:15PM ET,LAC,3.3
+,,,,,,,,,,,WR,Devontez Walker (44904829),Devontez Walker,44904829,CPT,2700,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.19
+,,,,,,,,,,,TE,Charlie Kolar (44904772),Charlie Kolar,44904772,FLEX,2600,LAC@BAL 11/16/2026 08:15PM ET,LAC,4.2
+,,,,,,,,,,,TE,David Njoku (44904773),David Njoku,44904773,FLEX,2400,LAC@BAL 11/16/2026 08:15PM ET,LAC,6.35
+,,,,,,,,,,,TE,Josh Cuevas (44904830),Josh Cuevas,44904830,CPT,2400,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.27
+,,,,,,,,,,,RB,Rasheen Ali (44904831),Rasheen Ali,44904831,CPT,2100,LAC@BAL 11/16/2026 08:15PM ET,BAL,0.27
+,,,,,,,,,,,WR,KeAndre Lambert-Smith (44904774),KeAndre Lambert-Smith,44904774,FLEX,2000,LAC@BAL 11/16/2026 08:15PM ET,LAC,3.3
+,,,,,,,,,,,WR,Devontez Walker (44904775),Devontez Walker,44904775,FLEX,1800,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.19
+,,,,,,,,,,,WR,LaJohntay Wester (44904832),LaJohntay Wester,44904832,CPT,1800,LAC@BAL 11/16/2026 08:15PM ET,BAL,1.09
+,,,,,,,,,,,TE,Josh Cuevas (44904776),Josh Cuevas,44904776,FLEX,1600,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.27
+,,,,,,,,,,,WR,Brenen Thompson (44904833),Brenen Thompson,44904833,CPT,1500,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.15
+,,,,,,,,,,,RB,Rasheen Ali (44904777),Rasheen Ali,44904777,FLEX,1400,LAC@BAL 11/16/2026 08:15PM ET,BAL,0.27
+,,,,,,,,,,,WR,LaJohntay Wester (44904778),LaJohntay Wester,44904778,FLEX,1200,LAC@BAL 11/16/2026 08:15PM ET,BAL,1.09
+,,,,,,,,,,,WR,Elijah Sarratt (44904834),Elijah Sarratt,44904834,CPT,1200,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.3
+,,,,,,,,,,,WR,Brenen Thompson (44904779),Brenen Thompson,44904779,FLEX,1000,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.15
+,,,,,,,,,,,TE,Matt Hibner (44904835),Matt Hibner,44904835,CPT,900,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.44
+,,,,,,,,,,,WR,Elijah Sarratt (44904780),Elijah Sarratt,44904780,FLEX,800,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.3
+,,,,,,,,,,,TE,Matt Hibner (44904781),Matt Hibner,44904781,FLEX,600,LAC@BAL 11/16/2026 08:15PM ET,BAL,2.44
+,,,,,,,,,,,WR,Derius Davis (44904836),Derius Davis,44904836,CPT,600,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.19
+,,,,,,,,,,,WR,Derius Davis (44904782),Derius Davis,44904782,FLEX,400,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.19
+,,,,,,,,,,,RB,Alec Ingold (44904837),Alec Ingold,44904837,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.3
+,,,,,,,,,,,RB,Adam Randall (44904838),Adam Randall,44904838,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,RB,Scott Matlock (44904839),Scott Matlock,44904839,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,RB,Amar Johnson (44904840),Amar Johnson,44904840,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,RB,Lucas Scott (44904841),Lucas Scott,44904841,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,WR,Chris Moore (44904842),Chris Moore,44904842,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.82
+,,,,,,,,,,,WR,Theo Wease Jr. (44904843),Theo Wease Jr.,44904843,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,3.35
+,,,,,,,,,,,WR,Luke Grimm (44904844),Luke Grimm,44904844,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,WR,Gage Larvadain (44904845),Gage Larvadain,44904845,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,WR,Tejhaun Palmer (44904846),Tejhaun Palmer,44904846,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,TE,Durham Smythe (44904847),Durham Smythe,44904847,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0.35
+,,,,,,,,,,,TE,Ty Pezza (44904848),Ty Pezza,44904848,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,TE,Nick Vannett (44904849),Nick Vannett,44904849,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,TE,Patrick Herbert (44904850),Patrick Herbert,44904850,CPT,300,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,RB,Alec Ingold (44904783),Alec Ingold,44904783,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,1.3
+,,,,,,,,,,,RB,Adam Randall (44904784),Adam Randall,44904784,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,RB,Scott Matlock (44904785),Scott Matlock,44904785,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,RB,Amar Johnson (44904786),Amar Johnson,44904786,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,RB,Lucas Scott (44904787),Lucas Scott,44904787,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,WR,Chris Moore (44904788),Chris Moore,44904788,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,3.82
+,,,,,,,,,,,WR,Theo Wease Jr. (44904789),Theo Wease Jr.,44904789,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,3.35
+,,,,,,,,,,,WR,Luke Grimm (44904790),Luke Grimm,44904790,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,WR,Gage Larvadain (44904791),Gage Larvadain,44904791,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,WR,Tejhaun Palmer (44904792),Tejhaun Palmer,44904792,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,0
+,,,,,,,,,,,TE,Durham Smythe (44904793),Durham Smythe,44904793,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0.35
+,,,,,,,,,,,TE,Ty Pezza (44904794),Ty Pezza,44904794,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,TE,Nick Vannett (44904795),Nick Vannett,44904795,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,BAL,0
+,,,,,,,,,,,TE,Patrick Herbert (44904796),Patrick Herbert,44904796,FLEX,200,LAC@BAL 11/16/2026 08:15PM ET,LAC,0

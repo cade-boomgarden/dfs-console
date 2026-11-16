@@ -16,7 +16,8 @@ export default function Pool() {
   const { slateId } = useParams();
   const qc = useQueryClient();
   const pool = useQuery({ queryKey: ["pool", slateId],
-    queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
+    queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean; showdown?: boolean }>(`/api/slates/${slateId}/pool`) });
+  const showdown = Boolean(pool.data?.showdown);
   const profiles = usePoolProfiles(slateId);
   const [pos, setPos] = useState("ALL");
   const [q, setQ] = useState("");
@@ -58,7 +59,29 @@ export default function Pool() {
     col.accessor("floor", { header: "Floor", cell: (c) => <span className="text-[var(--down)]">{num(c.getValue())}</span> }),
     col.accessor("ceiling", { header: "Ceil", cell: (c) => <span className="text-[var(--up)]">{num(c.getValue())}</span> }),
     col.accessor("value", { header: "Val", cell: (c) => num(c.getValue(), 2) }),
-    col.accessor("ownership", { header: "Own%", cell: (c) => num(c.getValue()) }),
+    col.accessor("ownership", { header: showdown ? "FLEX own%" : "Own%", cell: (c) => num(c.getValue()) }),
+    ...(showdown ? [
+      col.accessor("cpt_salary", { header: "CPT $", cell: (c) => money(c.getValue() ?? 0) }),
+      col.accessor("cpt_ownership", { header: "CPT own%", cell: (c) => num(c.getValue()) }),
+      col.display({ id: "own_set", header: "FLEX own set", cell: ({ row }) => (
+        <input type="number" step={0.5} className="w-14 px-1 py-0.5 text-right"
+          title="Override FLEX ownership; the ownership job keeps it and spreads the rest"
+          defaultValue={(row.original.adjustments.ownership as number) ?? ""}
+          onBlur={(e) => {
+            const v = e.target.value === "" ? null : Number(e.target.value);
+            setAdj(row.original.player_id, "ownership", v, v !== null);
+          }} />
+      )}),
+      col.display({ id: "cpt_own_set", header: "CPT own set", cell: ({ row }) => (
+        <input type="number" step={0.5} className="w-14 px-1 py-0.5 text-right"
+          title="Override captain ownership; the ownership job keeps it and spreads the rest"
+          defaultValue={(row.original.adjustments.cpt_ownership as number) ?? ""}
+          onBlur={(e) => {
+            const v = e.target.value === "" ? null : Number(e.target.value);
+            setAdj(row.original.player_id, "cpt_ownership", v, v !== null);
+          }} />
+      )}),
+    ] : []),
     col.accessor("dvp_rank", { header: "DvP", cell: (c) => c.getValue() ?? "—" }),
     col.display({ id: "delta", header: "Δ", cell: ({ row }) => (
       <input type="number" step={0.5} className="w-14 px-1 py-0.5 text-right"
@@ -76,7 +99,7 @@ export default function Pool() {
           setAdj(row.original.player_id, "multiplier", v, v !== null && v !== 1);
         }} />
     )}),
-  ], [slateId, profiles]);
+  ], [slateId, profiles, showdown]);
 
   const data = useMemo(() => (pool.data?.players ?? []).filter((p) =>
     (pos === "ALL" || p.position === pos) &&
@@ -93,7 +116,7 @@ export default function Pool() {
       <div className="flex gap-2 items-center">
         <h1 className="eyebrow">Player pool</h1>
         <div className="ml-auto flex gap-2">
-          {["ALL", "QB", "RB", "WR", "TE", "DST"].map((p) => (
+          {(showdown ? ["ALL", "QB", "RB", "WR", "TE", "K", "DST"] : ["ALL", "QB", "RB", "WR", "TE", "DST"]).map((p) => (
             <button key={p} onClick={() => setPos(p)}
               className={`px-2 py-1 rounded text-xs ${pos === p ? "bg-[var(--raised)]" : "text-[var(--dim)]"}`}>{p}</button>
           ))}
@@ -134,7 +157,10 @@ export default function Pool() {
         </table>
       </div>
       <PlayerDrawer playerId={detail} slateId={slateId} onClose={() => setDetail(null)} />
-      <div className="text-[11px] text-[var(--dim)]">{data.length} players · Δ adds points, × multiplies the projection. Both persist for this slate.</div>
+      <div className="text-[11px] text-[var(--dim)]">
+        {data.length} players · Δ adds points, × multiplies the projection. Both persist for this slate.
+        {showdown && " Captain projections are 1.5x these; lock and exclude cover both slots."}
+      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ from ..models.models import (Game, OddsSnapshot, PlayerCanonical, PoolPlayer,
 from ..settings import get_settings
 from ..sources import draftkings as dk
 from ..sources import fantasypros as fp
+from ..core.scoring import kicker_projection
 from .fpmatch import match_fp, projection_points
 from ..sources import odds as oddsrc
 from .runner import JobContext, register
@@ -48,7 +49,9 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
     ctx.update(0.05, "Resolving main slate")
     if payload.get("draft_group_id"):
         gid = int(payload["draft_group_id"])
-        slate_name = payload.get("name") or f"Draft group {gid}"
+        slate_name = payload.get("name") or (
+            f"NFL {payload['season']} wk{payload['week']} (DG {gid})"
+            if payload.get("season") and payload.get("week") else f"Draft group {gid}")
         start_time, game_count = None, 0
     else:
         lobby = (_load_fixture(fixture_dir, "contests_groups_only.json")
@@ -81,6 +84,12 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
     raw = (_load_fixture(fixture_dir, "dkdraftables_fixture_small.json")
            if fixture_dir else dk.fetch_draftables(gid))
     parsed = dk.parse_draftables(raw)
+    showdown = parsed.get("slate_type") == "showdown"
+    slate.slate_type = parsed.get("slate_type") or "classic"
+    slate.roster_slots = parsed.get("roster_slots")
+    if showdown and parsed["games"] and not payload.get("name"):
+        g0 = parsed["games"][0]
+        slate.name = f"{g0['away']} @ {g0['home']} Showdown"
 
     # A draft-group override skips the lobby, so the slate has no start time
     # or game count yet. Take both from the draftables: the list sorts on
@@ -94,8 +103,10 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
 
     # salary history for the player detail pages (every listed player,
     # OUT/IR included -- the pool below drops them)
-    from .salaries import record_salaries
-    record_salaries(db, gid, slate.season, slate.week, parsed)
+    # Showdown prices are a different scale; they stay out of the history
+    if not showdown:
+        from .salaries import record_salaries
+        record_salaries(db, gid, slate.season, slate.week, parsed)
 
     comp_to_game: dict[int, Game] = {}
     for g in parsed["games"]:
@@ -139,6 +150,8 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
                 "season-long totals.")
         fp_raw = fp.fetch(int(season), int(week), settings.fantasypros_api_key)
     fp_players = fp.parse_projections(fp_raw)
+    if not showdown:
+        fp_players = [r for r in fp_players if r["position"] != "K"]
     fp_total = len(fp_players)
     fp_with_stats = sum(1 for r in fp_players if (r.get("stats") or {}))
     if fp_with_stats < 200:
@@ -235,18 +248,25 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
             opponent=opp, game_key=f"g{rec['competition_id']}",
             salary=rec["salary"], status=rec.get("status"),
             dvp_rank=rec.get("dvp_rank"),
-            projection=projection_points(stats),
+            projection=(kicker_projection(stats) if rec["position"] == "K"
+                        else projection_points(stats)),
             implied_opp_total=implied.get(opp),
             stats=stats, draftable_ids=rec["draftable_ids"],
+            cpt_salary=rec.get("cpt_salary") if showdown else None,
         ))
         n_pool += 1
     db.commit()
 
     ctx.update(0.95, "Bootstrapping ownership")
-    _bootstrap_ownership(db, pv.id)
+    if showdown:
+        from .field import showdown_ownership
+        showdown_ownership(db, pv.id)
+    else:
+        _bootstrap_ownership(db, pv.id)
     ctx.update(1.0, f"Ingested {slate.name}: {n_pool} players, {len(games)} games")
 
     return {"slate_id": slate.id, "pool_version_id": pv.id,
+            "slate_type": slate.slate_type,
             "pool_size": n_pool, "fp_unmatched": n_unmatched,
         "fp_records": fp_total, "fp_with_stats": fp_with_stats,
         "no_projection_count": len(no_projection),

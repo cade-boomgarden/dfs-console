@@ -88,10 +88,9 @@ export default function Slates() {
             disabled={!season || !week || week < 1 || week > 18}
             onClick={() => start({
               season, week, label: `${season} wk${week}`,
-              ...(draftGroup ? { draft_group_id: Number(draftGroup),
-                                 name: `NFL ${season} wk${week} (DG ${draftGroup})` } : {}),
+              ...(draftGroup ? { draft_group_id: Number(draftGroup) } : {}),
             })}>
-            Ingest live main slate
+            {draftGroup ? "Ingest draft group" : "Ingest live main slate"}
           </Btn>
           <Btn onClick={() => start({ fixture_dir: "backend/tests/fixtures", label: "fixture" })}>
             Ingest fixture slate
@@ -114,7 +113,9 @@ export default function Slates() {
           FantasyPros answers a wrong week with a well-formed payload for the wrong
           week, and an omitted week with season-long totals. The slate itself is
           resolved from the DraftKings lobby (earliest main slate not yet started);
-          these two only select the projections. Enter a draft group ID to override the lobby pick.
+          these two only select the projections. Enter a draft group ID to override the lobby pick:
+          it is the number in the lobby URL (draftkings.com/lobby#/NFL/<b>156434</b>/All). A Showdown
+          draft group is detected automatically and ingested with kickers and captain prices.
           Refresh player profiles rebuilds usage profiles from nflverse play-by-play, using games
           before this week, and links the pool's players to them. Run it after ingesting the week's slate.
         </div>
@@ -143,11 +144,12 @@ export default function Slates() {
           <Link key={s.id} to={`/slate/${s.id}`}
             className="flex items-center gap-4 px-4 py-3 hover:bg-[var(--raised)]">
             <div className="font-bold">{s.name || `Draft group ${s.draft_group_id}`}</div>
+            {s.slate_type === "showdown" && <Badge tone="amber">Showdown</Badge>}
             <div className="text-[var(--dim)] num">DG {s.draft_group_id}</div>
             {s.season && s.week && (
               <div className="text-[var(--dim)] num">{s.season} wk{s.week}</div>
             )}
-            <div className="text-[var(--dim)] num">{s.game_count} games</div>
+            <div className="text-[var(--dim)] num">{s.game_count} game{s.game_count === 1 ? "" : "s"}</div>
             <div className="ml-auto flex gap-2">
               {s.has_sims ? <Badge>sims ready</Badge> : <Badge>no sims</Badge>}
             </div>

@@ -9,6 +9,7 @@ interface Exposure {
   opponent: string; salary: number | null; projection: number | null;
   ceiling: number | null; ownership: number | null; value: number | null;
   implied_total: number | null; count: number; exposure: number;
+  cpt_count?: number | null; cpt_exposure?: number | null; cpt_ownership?: number | null;
 }
 interface TeamExposure {
   team: string; implied_total: number | null; lineups: number;
@@ -16,6 +17,7 @@ interface TeamExposure {
 }
 interface Detail {
   id: number; kind: string; label: string; n_eff: number | null; n_eff_flag: boolean;
+  showdown?: boolean;
   lineups: LineupDTO[]; exposures: Exposure[]; team_exposures: TeamExposure[];
   diagnostics: { n_eff_random_baseline?: number; n_candidates?: number;
                  selection_basis?: string; weight_basis?: string };
@@ -24,6 +26,7 @@ interface Detail {
 }
 
 const POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "DST"] as const;
+const SD_POSITIONS = ["ALL", "QB", "RB", "WR", "TE", "K", "DST"] as const;
 type SortKey = "exposure" | "projection" | "value" | "salary" | "ownership";
 type LineupSortKey = "ordinal" | "projection" | "ceiling" | "salary" | "ownership"
   | "median" | "ev" | "neff_delta";
@@ -145,7 +148,7 @@ export default function SetDetail() {
           <div className="flex items-center gap-2 px-3 py-2 border-b hairline">
             <span className="eyebrow">Player exposure</span>
             <div className="ml-auto flex gap-1">
-              {POSITIONS.map((p) => (
+              {(d.data?.showdown ? SD_POSITIONS : POSITIONS).map((p) => (
                 <button key={p} onClick={() => setPos(p)}
                   className={`px-2 py-0.5 rounded text-xs ${pos === p ? "bg-[var(--raised)] text-[var(--ink)]" : "text-[var(--dim)] hover:text-[var(--ink)]"}`}>
                   {p}
@@ -164,6 +167,8 @@ export default function SetDetail() {
                   <Th k="ownership" right>Own%</Th>
                   <Th right>Impl</Th>
                   <Th k="exposure" right>Exposure</Th>
+                  {d.data?.showdown && <Th right>CPT</Th>}
+                  {d.data?.showdown && <Th right>CPT own%</Th>}
                 </tr>
               </thead>
               <tbody>
@@ -182,6 +187,15 @@ export default function SetDetail() {
                       <span className="ml-2">{(e.exposure * 100).toFixed(0)}%</span>
                       <span className="ml-1 text-[var(--mute)]">({e.count})</span>
                     </td>
+                    {d.data?.showdown && (
+                      <td className="px-2 py-1 text-right num whitespace-nowrap">
+                        {e.cpt_count ? <>{((e.cpt_exposure ?? 0) * 100).toFixed(0)}%
+                          <span className="ml-1 text-[var(--mute)]">({e.cpt_count})</span></> : "—"}
+                      </td>
+                    )}
+                    {d.data?.showdown && (
+                      <td className="px-2 py-1 text-right num text-[var(--dim)]">{num(e.cpt_ownership)}</td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -189,6 +203,7 @@ export default function SetDetail() {
           </div>
           <div className="px-3 py-1.5 text-[10px] text-[var(--dim)] border-t hairline">
             {rows.length} players · Val = projected points per $1,000 · Impl = team implied total
+            {d.data?.showdown && " · Exposure counts either slot; CPT is the share at captain"}
           </div>
         </div>
 
@@ -226,8 +241,10 @@ export default function SetDetail() {
             <div className="eyebrow mb-2">Pairwise overlap</div>
             <div className="flex items-end gap-0.5 h-14">
               {s.overlap_hist.map((c, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-0.5">
-                  <div className="w-full bg-[var(--chart)]" style={{ height: `${(c / maxOv) * 100}%` }} />
+                <div key={i} className="flex-1 h-full flex flex-col items-center gap-0.5" title={`${c} pairs share ${i}`}>
+                  <div className="flex-1 w-full flex items-end">
+                    <div className="w-full bg-[var(--chart)]" style={{ height: `${(c / maxOv) * 100}%` }} />
+                  </div>
                   <span className="text-[9px] text-[var(--dim)] num">{i}</span>
                 </div>
               ))}
@@ -339,7 +356,7 @@ export default function SetDetail() {
                 )}
                 <td className="px-2 py-1.5 text-[11px]">{lu.lineup_type}</td>
                 <td className="px-2 py-1.5 text-[11px] text-[var(--dim)] max-w-[420px]">
-                  {lu.slots.map((sl) => sl.name).join(" · ")}
+                  {lu.slots.map((sl) => (sl.slot === "CPT" ? `${sl.name} (CPT)` : sl.name)).join(" · ")}
                 </td>
                 <td className="px-2 py-1.5 text-right whitespace-nowrap">
                   {armed === lu.id ? (

@@ -57,7 +57,7 @@ def build_envs(games: list[Game], pool: list[PoolPlayer]) -> dict[str, GameEnv]:
     """
     agg: dict[str, dict[str, float]] = {}
     for pp in pool:
-        if pp.position == "DST":
+        if pp.position in ("DST", "K"):
             continue
         s = pp.stats or {}
         a = agg.setdefault(pp.team, {"qb_att": 0.0, "pass_tds": 0.0,
@@ -99,7 +99,7 @@ def load_profiles(db, pool: list[PoolPlayer]) -> tuple[dict[int, PlayerProfile],
     out: dict[int, PlayerProfile] = {}
     hits = 0
     for pp in pool:
-        if pp.position == "DST":
+        if pp.position in ("DST", "K"):
             continue
         c = canon.get(pp.player_id)
         s = snaps.get(c.gsis_id) if (c and c.gsis_id) else None
@@ -178,6 +178,7 @@ def simulate_job(job_id: int) -> None:
                 position=pp.position,
                 line=statline_from_stats(pp.name, pp.position, pp.stats or {}),
                 dst_stats=pp.stats if pp.position == "DST" else None,
+                k_stats=pp.stats if pp.position == "K" else None,
                 implied_opponent_total=pp.implied_opp_total or 21.0,
                 dispersion=dispersion_for(pp.position, coeffs, prof),
                 variance_scale=variance_overrides.get(pp.player_id, 1.0),
@@ -208,6 +209,12 @@ def simulate_job(job_id: int) -> None:
         from .blobgc import prune_pool_blobs
         prune_pool_blobs(db, keep=max(settings.sims_keep - 1, 0), protect={pv_id})
         db.commit()
+        showdown = any(pp.cpt_salary is not None for pp in pool)
+        if showdown:
+            # captain entries get their own 1.5x columns, so every consumer
+            # scores a Showdown lineup as six entry ids, unchanged
+            from ..core.showdown import expand_matrix
+            matrix, order = expand_matrix(matrix, order)
         key = simscache.put(pv_id, matrix, order)
         pv.sims_blob_key = key
         pv.n_sims = n_sims
@@ -215,13 +222,14 @@ def simulate_job(job_id: int) -> None:
         db.commit()
         n_corr = sum(1 for p in sim_players if p.game_id in envs)
         ctx.finish({"pool_version_id": pv_id, "n_sims": n_sims,
-                    "n_players": len(order), "blob_key": key,
+                    "n_players": len(pool), "blob_key": key,
+                    "showdown": showdown,
                     "profiles_used": prof_hits,
                     "cold_start": len(prof_map) - prof_hits,
                     "coeffs_fitted": bool(coeffs.meta.get("fitted")),
                     "correlated_games": len(envs),
                     "correlated_players": n_corr,
-                    "independent_players": len(order) - n_corr,
+                    "independent_players": len(sim_players) - n_corr,
                     "gameenv_fitted": bool(env_coeffs.meta.get("fitted")),
                     "uncertainty_scale": unc_scale,
                     "max_lead_hours": round(max(

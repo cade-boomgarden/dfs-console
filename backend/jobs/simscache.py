@@ -23,8 +23,12 @@ def blob_store() -> LocalBlobStore:
 def put(pool_version_id: int, matrix: np.ndarray, order: list[str]) -> str:
     store = blob_store()
     key = f"sims/pv{pool_version_id}.npy"
-    store.put(key, simsfmt.pack(matrix))
+    blob = simsfmt.pack(matrix)
+    store.put(key, blob)
     store.put(f"sims/pv{pool_version_id}.order.json", json.dumps(order).encode())
+    # cache what the blob holds (int16 x100), not the unrounded draws, so a
+    # restart reloads the identical matrix and sims tokens still match
+    matrix = simsfmt.unpack(blob)
     with _lock:
         _cache[pool_version_id] = (matrix, {pid: i for i, pid in enumerate(order)})
     return key

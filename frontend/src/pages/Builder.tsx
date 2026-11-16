@@ -6,7 +6,10 @@ import { Btn, DistStrip, Field, money, num } from "../ui";
 import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
 import { EyeButton, PlayerDrawer } from "../components/PlayerDetail";
 
-const SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
+const CLASSIC_SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
+// Showdown: the captain scores 1.5x at 1.5x salary; every position is eligible
+const SHOWDOWN_SLOTS = ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"];
+const ALL_POS = ["QB", "RB", "WR", "TE", "K", "DST"];
 const SALARY_CAP = 50000;
 const signedMoney = (v: number) => (v < 0 ? `-${money(-v)}` : money(v));
 type Objective = "mean" | "median" | "ceiling";
@@ -23,11 +26,16 @@ const TOP_GROUPS = 5;
 const ELIGIBLE: Record<string, string[]> = {
   QB: ["QB"], RB: ["RB"], WR: ["WR"], TE: ["TE"], DST: ["DST"], FLEX: ["RB", "WR", "TE"],
 };
+const ELIGIBLE_SD: Record<string, string[]> = { CPT: ALL_POS, FLEX: ALL_POS };
 
 export default function Builder() {
   const { slateId } = useParams();
   const pool = useQuery({ queryKey: ["pool", slateId],
-    queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean }>(`/api/slates/${slateId}/pool`) });
+    queryFn: () => api.get<{ players: PoolPlayer[]; has_sims: boolean; showdown?: boolean }>(`/api/slates/${slateId}/pool`) });
+  const showdown = Boolean(pool.data?.showdown);
+  const SLOTS = showdown ? SHOWDOWN_SLOTS : CLASSIC_SLOTS;
+  const eligible = showdown ? ELIGIBLE_SD : ELIGIBLE;
+  const isCpt = (i: number) => showdown && i === 0;
   const profiles = usePoolProfiles(slateId);
   // the hand set Builder saves land in; refetched after every save
   const qc = useQueryClient();
@@ -49,7 +57,17 @@ export default function Builder() {
   const [objective, setObjective] = useState<Objective>("mean");
   const [detail, setDetail] = useState<number | null>(null);
   const timer = useRef<number>();
-
+  // the slot count follows the slate type once the pool loads
+  useEffect(() => {
+    setSlots((prev) => (prev.length === SLOTS.length ? prev : Array(SLOTS.length).fill(null)));
+    setActive(0);
+  }, [SLOTS.length]);
+  /** A pool row as it plays in slot i: captain salary/points in the CPT slot. */
+  const asSlot = (p: PoolPlayer, i: number) => (isCpt(i) ? {
+    ...p, salary: p.cpt_salary ?? Math.round(p.salary * 1.5),
+    projection: p.projection * 1.5, floor: p.floor * 1.5, ceiling: p.ceiling * 1.5,
+    ownership: p.cpt_ownership ?? 0,
+  } : p);
   const byId = useMemo(() => {
     const m = new Map<number, PoolPlayer>();
     pool.data?.players.forEach((p) => m.set(p.player_id, p));
@@ -92,7 +110,10 @@ export default function Builder() {
   const highlighted = new Set(hoverGroup ?? groups.triples[0]?.slots ?? []);
 
   const picked = slots.filter((s): s is number => s !== null);
-  const salary = picked.reduce((a, id) => a + (byId.get(id)?.salary ?? 0), 0);
+  const salary = slots.reduce<number>((a, id, i) => {
+    const p = id === null ? undefined : byId.get(id);
+    return a + (p ? asSlot(p, i).salary : 0);
+  }, 0);
   const remaining = SALARY_CAP - salary;
   const openSlots = SLOTS.length - picked.length;
   // floored: the average you can spend on each open slot and still fit
@@ -114,13 +135,15 @@ export default function Builder() {
   }, [slots, slateId, pool.data?.has_sims]);
 
   const options = useMemo(() => {
-    const slotName = SLOTS[active];
+    const slotName = SLOTS[active] ?? SLOTS[0];
     const inUse = new Set(picked);
     return (pool.data?.players ?? [])
-      .filter((p) => ELIGIBLE[slotName].includes(p.position) && !inUse.has(p.player_id))
+      .filter((p) => eligible[slotName].includes(p.position) && !inUse.has(p.player_id))
       .filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()) || p.team.toLowerCase() === q.toLowerCase())
+      .map((p) => asSlot(p, active))
       .sort((a, b) => b.salary - a.salary);
-  }, [pool.data, active, q, picked]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pool.data, active, q, picked, showdown]);
 
   const pick = (id: number) => {
     const next = [...slots];
@@ -171,7 +194,8 @@ export default function Builder() {
       <div className="space-y-1">
         <h2 className="eyebrow mb-2">Lineup</h2>
         {SLOTS.map((s, i) => {
-          const p = slots[i] !== null ? byId.get(slots[i]!) : null;
+          const raw = slots[i] !== null ? byId.get(slots[i]!) : null;
+          const p = raw ? asSlot(raw, i) : null;
           return (
             <button key={i} onClick={() => setActive(i)}
               className={`w-full flex items-center gap-2 px-2 py-1.5 rounded border text-left
@@ -227,10 +251,10 @@ export default function Builder() {
         </div>
         <div className="flex gap-2">
           <Btn kind="primary" onClick={complete} disabled={!!busy}>Complete with optimizer</Btn>
-          <Btn onClick={() => setSlots(Array(9).fill(null))} kind="ghost">Clear</Btn>
+          <Btn onClick={() => setSlots(Array(SLOTS.length).fill(null))} kind="ghost">Clear</Btn>
         </div>
         <div className="flex gap-2">
-          <Btn onClick={() => save(false)} disabled={picked.length < 9 || !!busy}>Save lineup</Btn>
+          <Btn onClick={() => save(false)} disabled={picked.length < SLOTS.length || !!busy}>Save lineup</Btn>
           <Btn onClick={() => save(true)} kind="ghost" disabled={picked.length === 0 || !!busy}>Save draft</Btn>
         </div>
         {busy && <div className="text-[11px] text-[var(--dim)]">{busy}</div>}
@@ -297,7 +321,7 @@ export default function Builder() {
       {/* picker */}
       <div>
         <div className="flex gap-2 items-center mb-2">
-          <h2 className="eyebrow">Fill {SLOTS[active]}</h2>
+          <h2 className="eyebrow">Fill {SLOTS[active]}{isCpt(active) ? " (1.5x salary and points)" : ""}</h2>
           <input autoFocus placeholder="Type to search…" value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && options[0]) pick(options[0].player_id); }}
@@ -307,7 +331,8 @@ export default function Builder() {
           <table className="w-full">
             <thead className="sticky top-0 bg-[var(--panel)]">
               <tr className="border-b hairline">
-                {["", "", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil", "Own%", "Exp%"].map((h) => (
+                {["", "", "Player", "Pos", "Tm", "Opp", "Salary", "Proj", "Floor", "Ceil",
+                  isCpt(active) ? "CPT own%" : "Own%", "Exp%"].map((h) => (
                   <th key={h} className="px-2 py-1.5 text-left text-[10px] uppercase tracking-wider text-[var(--dim)]">{h}</th>
                 ))}
               </tr>
@@ -377,7 +402,11 @@ export default function Builder() {
                 <div className="eyebrow mb-1">Per-player mean</div>
                 {Object.entries(ev.marginal).map(([pid, m]) => (
                   <div key={pid} className="flex justify-between text-[11px] num">
-                    <span className="text-[var(--dim)] truncate">{byId.get(Number(pid))?.name ?? pid}</span>
+                    <span className="text-[var(--dim)] truncate">
+                      {pid.startsWith("c")
+                        ? `${byId.get(Number(pid.slice(1)))?.name ?? pid} (CPT)`
+                        : byId.get(Number(pid))?.name ?? pid}
+                    </span>
                     <span>{num(m)}</span>
                   </div>
                 ))}

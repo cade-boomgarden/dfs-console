@@ -35,6 +35,7 @@ class Position(str, Enum):
     WR = "WR"
     TE = "TE"
     DST = "DST"
+    K = "K"          # Showdown only
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,17 @@ class Player:
     floor: float = 0.0
     stddev: float = 0.0
     ownership: float = 0.0
+    # Showdown: every player is two entries, a FLEX entry (id = player id)
+    # and a captain entry (id = "c" + player id, 1.5x salary and points).
+    # slot_role is "CPT" | "FLEX" there and "" on Classic; base_id ties a
+    # captain entry back to its player.
+    slot_role: str = ""
+    base_id: str = ""
+
+    @property
+    def base(self) -> str:
+        """The player behind this entry (the id itself on Classic)."""
+        return self.base_id or self.id
 
     @property
     def flex_eligible(self) -> bool:
@@ -77,6 +89,11 @@ DK_NFL_CLASSIC = (
 )
 
 
+_ALL_POS = tuple(Position)
+DK_NFL_SHOWDOWN = (Slot("CPT", _ALL_POS),) + tuple(
+    Slot("FLEX", _ALL_POS) for _ in range(5))
+
+
 @dataclass(frozen=True)
 class RosterRules:
     slots: tuple[Slot, ...] = DK_NFL_CLASSIC
@@ -84,6 +101,9 @@ class RosterRules:
     min_salary: int = 0
     min_games: int = 2
     max_per_team: int | None = None  # None = no limit
+    # Showdown: one captain entry + five FLEX entries, players from both
+    # teams, a player at most once. Position bounds do not apply.
+    showdown: bool = False
 
     def position_bounds(self) -> dict[Position, tuple[int, int]]:
         """Min/max count for each position implied by the slot definitions."""
@@ -103,6 +123,11 @@ class RosterRules:
     @property
     def size(self) -> int:
         return len(self.slots)
+
+
+def showdown_rules(salary_cap: int = 50_000, min_salary: int = 0) -> RosterRules:
+    return RosterRules(slots=DK_NFL_SHOWDOWN, salary_cap=salary_cap,
+                       min_salary=min_salary, min_games=1, showdown=True)
 
 
 # --------------------------------------------------------------------------
@@ -168,6 +193,10 @@ class BuildConfig:
     # Tighten the position bounds the slots already imply. {"TE": 1} forbids a
     # TE in FLEX; {"RB": 3} allows at most one RB there. Can only tighten.
     position_limits: dict[str, int] = field(default_factory=dict)
+    # Lineups (entry-id sets) the solve may not return again. Stage A on
+    # Showdown passes the candidates already found for the construction, so a
+    # repeat solve yields the next-best lineup instead of a duplicate.
+    avoid: tuple[frozenset[str], ...] = ()
 
     seed: int | None = None
 
@@ -195,7 +224,13 @@ class Lineup:
 
     @property
     def player_ids(self) -> frozenset[str]:
+        """Entry ids. On Showdown the same six players with a different
+        captain are a different lineup, as on DraftKings."""
         return frozenset(p.id for p in self.players)
+
+    @property
+    def base_ids(self) -> frozenset[str]:
+        return frozenset(p.base for p in self.players)
 
     def overlap(self, other: "Lineup") -> int:
         return len(self.player_ids & other.player_ids)
@@ -236,13 +271,17 @@ def build(
     rules = rules or RosterRules()
     rng = random.Random(cfg.seed)
 
-    players = [p for p in pool if p.id not in cfg.excluded_ids]
+    # an exclude on a player removes both of his Showdown entries; an exclude
+    # on a captain entry id ("c123") removes only that entry
+    players = [p for p in pool if p.id not in cfg.excluded_ids
+               and p.base not in cfg.excluded_ids]
     if len(players) < rules.size:
         raise InfeasibleError(f"pool has {len(players)} players, need {rules.size}")
 
     by_id = {p.id: p for p in players}
+    bases = {p.base for p in players}
     for pid in cfg.locked_ids:
-        if pid not in by_id:
+        if pid not in by_id and pid not in bases:
             raise InfeasibleError(f"locked player {pid!r} is not in the pool")
 
     # Validate configuration BEFORE the loop. The loop catches InfeasibleError
@@ -262,6 +301,7 @@ def build(
     usage: dict[str, int] = {p.id: 0 for p in players}
     qb_usage: dict[str, int] = {}
 
+    usage.update({p.base: 0 for p in players})
     for i in range(cfg.n_lineups):
         blocked = _blocked_ids(cfg, usage, qb_usage, len(lineups), players)
         try:
@@ -271,8 +311,8 @@ def build(
 
         lineups.append(lineup)
         for p in lineup.players:
-            usage[p.id] += 1
-            if p.position is Position.QB:
+            usage[p.base] += 1
+            if p.position is Position.QB and not rules.showdown:
                 qb_usage[p.id] = qb_usage.get(p.id, 0) + 1
         if on_lineup:
             on_lineup(i, lineup)
@@ -287,15 +327,17 @@ def _blocked_ids(
     made: int,
     players: Sequence[Player],
 ) -> set[str]:
-    """Players who have hit an exposure ceiling and must sit out this solve."""
+    """Players who have hit an exposure ceiling and must sit out this solve.
+    Exposure is per player (`usage` is keyed by Player.base), so a Showdown
+    player's captain and FLEX entries share one cap."""
     blocked: set[str] = set()
     denom = cfg.n_lineups
 
     for p in players:
-        cap = cfg.max_exposure.get(p.id, cfg.global_max_exposure)
+        cap = cfg.max_exposure.get(p.base, cfg.global_max_exposure)
         if cap is None:
             continue
-        if usage[p.id] >= cap * denom:
+        if usage.get(p.base, 0) >= cap * denom:
             blocked.add(p.id)
 
     if cfg.max_repeat_qb is not None:
@@ -303,7 +345,9 @@ def _blocked_ids(
             if n >= cfg.max_repeat_qb:
                 blocked.add(pid)
 
-    return blocked - set(cfg.locked_ids)
+    locked = set(cfg.locked_ids)
+    return {pid for pid in blocked
+            if pid not in locked and pid.removeprefix("c") not in locked}
 
 
 def base_model(
@@ -325,7 +369,11 @@ def base_model(
     x = [model.NewBoolVar(f"x_{p.id}") for p in players]
 
     # --- roster structure -------------------------------------------------
-    bounds = rules.position_bounds()
+    if rules.showdown:
+        _showdown_structure(model, x, players, cfg)
+        bounds = {}
+    else:
+        bounds = rules.position_bounds()
     for pos, (lo, hi) in bounds.items():
         members = [x[i] for i, p in enumerate(players) if p.position is pos]
         if not members:
@@ -343,7 +391,7 @@ def base_model(
         model.Add(sum(members) <= hi)
 
     for i, p in enumerate(players):
-        if p.position not in bounds:
+        if not rules.showdown and p.position not in bounds:
             model.Add(x[i] == 0)
 
     model.Add(sum(x) == rules.size)
@@ -374,8 +422,15 @@ def base_model(
         model.Add(sum(game_used.values()) >= rules.min_games)
 
     # --- locks / blocks ---------------------------------------------------
+    # a lock on a Showdown player (base id) means "rostered, either slot"
+    by_base: dict[str, list[int]] = {}
+    for i, p in enumerate(players):
+        by_base.setdefault(p.base, []).append(i)
     for pid in cfg.locked_ids:
-        model.Add(x[idx[pid]] == 1)
+        if pid in idx and (not rules.showdown or players[idx[pid]].slot_role == "CPT"):
+            model.Add(x[idx[pid]] == 1)
+        elif pid in by_base:
+            model.Add(sum(x[i] for i in by_base[pid]) == 1)
     for pid in blocked:
         if pid in idx:
             model.Add(x[idx[pid]] == 0)
@@ -403,6 +458,12 @@ def base_model(
     for rule in cfg.stacks:
         _apply_stack(model, x, players, rule)
 
+    # --- no-good cuts against lineups already found ------------------------
+    for ids in cfg.avoid:
+        members = [x[idx[i]] for i in ids if i in idx]
+        if len(members) == len(ids):
+            model.Add(sum(members) <= len(members) - 1)
+
     # --- arbitrary groups -------------------------------------------------
     for grp in cfg.groups:
         members = [x[idx[pid]] for pid in grp.player_ids if pid in idx]
@@ -414,6 +475,29 @@ def base_model(
             model.Add(sum(members) <= grp.max_from)
 
     return model, x, idx
+
+
+def _showdown_structure(model, x, players: Sequence[Player], cfg: BuildConfig) -> None:
+    """1 captain entry, 5 FLEX entries, a player at most once, players from
+    at least two teams (DraftKings Showdown rules)."""
+    cpt = [x[i] for i, p in enumerate(players) if p.slot_role == "CPT"]
+    flex = [x[i] for i, p in enumerate(players) if p.slot_role != "CPT"]
+    if not cpt:
+        raise InfeasibleError("no captain entries in the pool")
+    model.Add(sum(cpt) == 1)
+    model.Add(sum(flex) == 5)
+    by_base: dict[str, list[int]] = {}
+    for i, p in enumerate(players):
+        by_base.setdefault(p.base, []).append(i)
+    for members in by_base.values():
+        if len(members) > 1:
+            model.Add(sum(x[i] for i in members) <= 1)
+    by_team: dict[str, list[int]] = {}
+    for i, p in enumerate(players):
+        by_team.setdefault(p.team, []).append(i)
+    if len(by_team) >= 2:
+        for members in by_team.values():
+            model.Add(sum(x[i] for i in members) <= 5)
 
 
 def _solve_one(
@@ -451,6 +535,14 @@ def _solve_one(
 
 def _assign_slots(picked: Sequence[Player], rules: RosterRules) -> Lineup:
     """Map a chosen set of players onto named slots (most-constrained first)."""
+    if rules.showdown:
+        cpt = [p for p in picked if p.slot_role == "CPT"]
+        rest = sorted((p for p in picked if p.slot_role != "CPT"),
+                      key=lambda p: -p.salary)
+        if len(cpt) != 1 or len(rest) != rules.size - 1:
+            raise InfeasibleError("showdown lineup needs 1 CPT + 5 FLEX")
+        return Lineup(players=tuple(cpt + rest),
+                      slots=tuple(s.name for s in rules.slots))
     remaining = list(picked)
     order = sorted(range(len(rules.slots)), key=lambda i: len(rules.slots[i].positions))
     filled: dict[int, Player] = {}
@@ -532,7 +624,12 @@ def overlap_matrix(lineups: Sequence[Lineup]) -> list[list[int]]:
 
 
 def classify(lineup: Lineup) -> str:
-    """Port of get_lineup_type() from opto_summary.py."""
+    """Port of get_lineup_type() from opto_summary.py. Showdown lineups
+    label by team split from the captain's side ("BAL 4-2")."""
+    cpt = next((p for p in lineup.players if p.slot_role == "CPT"), None)
+    if cpt is not None:
+        own = sum(1 for p in lineup.players if p.team == cpt.team)
+        return f"{cpt.team} {own}-{len(lineup.players) - own}"
     qb = next((p for p in lineup.players if p.position is Position.QB), None)
     if qb is None:
         return "NO_QB"

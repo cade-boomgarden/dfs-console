@@ -28,6 +28,7 @@ def list_slates(db: Session = Depends(get_db), user: User = Depends(current_user
             "id": s.id, "name": s.name, "draft_group_id": s.draft_group_id,
             "season": s.season, "week": s.week, "start_time": s.start_time,
             "game_count": s.game_count,
+            "slate_type": s.slate_type or "classic",
             "pool_version_id": pv.id if pv else None,
             "has_sims": bool(pv and pv.sims_blob_key),
         })
@@ -45,6 +46,7 @@ def slate_detail(slate_id: int, db: Session = Depends(get_db),
     return {
         "id": s.id, "name": s.name, "draft_group_id": s.draft_group_id,
         "start_time": s.start_time,
+        "slate_type": s.slate_type or "classic",
         "vegas_median": scores["vegas_median"],
         "games": [{
             "id": g.id, "home": g.home, "away": g.away, "start_time": g.start_time,

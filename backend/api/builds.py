@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..auth.security import current_user
 from ..core.evaluator import portfolio_scores
+from ..core.showdown import entry_ids
 from ..core.skeletons import (allocation_counts, allocation_neff,
                               compose_weights)
 from ..jobs import fieldcache, skelcache
@@ -87,6 +88,7 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
             implied[g.away] = g.away_implied
 
     counts: dict[str, int] = {}
+    cpt_counts: dict[str, int] = {}
     team_lineups: dict[str, int] = {}
     team_slots: dict[str, int] = {}
     for lu in lineups:
@@ -97,6 +99,8 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
                 continue
             pid = str(pid)
             counts[pid] = counts.get(pid, 0) + 1
+            if sl.get("slot") == "CPT":
+                cpt_counts[pid] = cpt_counts.get(pid, 0) + 1
             pp = pool.get(pid)
             if pp:
                 team_slots[pp.team] = team_slots.get(pp.team, 0) + 1
@@ -105,6 +109,7 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
             team_lineups[t] = team_lineups.get(t, 0) + 1
 
     n = max(len(lineups), 1)
+    showdown = any(sl.get("slot") == "CPT" for lu in lineups for sl in lu.slots)
     exposures = []
     for pid, cnt in counts.items():
         pp = pool.get(pid)
@@ -125,6 +130,11 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
             "implied_total": implied.get(pp.team) if pp else None,
             "count": cnt,
             "exposure": round(cnt / n, 4),
+            # Showdown: the share of lineups with him at captain (inside
+            # `exposure`, which counts either slot)
+            "cpt_count": cpt_counts.get(pid, 0) if showdown else None,
+            "cpt_exposure": round(cpt_counts.get(pid, 0) / n, 4) if showdown else None,
+            "cpt_ownership": pp.cpt_ownership if (pp and showdown) else None,
         })
     exposures.sort(key=lambda r: -r["count"])
 
@@ -160,6 +170,7 @@ def set_detail(slate_id: int, set_id: int, db: Session = Depends(get_db),
 
     return {
         "id": ls.id, "kind": ls.kind, "label": ls.label, "status": ls.status,
+        "showdown": showdown,
         "n_eff": ls.n_eff, "n_eff_flag": ls.n_eff_flag,
         "edits": edits,
         "config": ls.config_snapshot, "pool_version_id": ls.pool_version_id,
@@ -292,8 +303,7 @@ def recompute_neff(slate_id: int, set_id: int, db: Session = Depends(get_db),
         raise HTTPException(404, "Lineup set not found")
     sims, col_index = sims_for_pool(ls.pool_version_id)
     lineups = db.query(LineupRow).filter_by(lineup_set_id=set_id).all()
-    ids = [[str(s["player_id"]) for s in lu.slots if s.get("player_id")]
-           for lu in lineups]
+    ids = [entry_ids(lu.slots) for lu in lineups]
     scores = portfolio_scores(ids, sims, col_index)
     ls.n_eff = round(n_eff(scores), 1)
     db.commit()
@@ -348,8 +358,7 @@ def delete_lineups(slate_id: int, set_id: int, body: DeleteLineupsIn,
     if cached is not None and k >= 1:
         sims, col_index = cached
         scores = portfolio_scores(
-            [[str(s["player_id"]) for s in lu.slots if s.get("player_id")]
-             for lu in remaining], sims, col_index)
+            [entry_ids(lu.slots) for lu in remaining], sims, col_index)
         ls.n_eff = round(n_eff(scores), 1)
         if 2 <= k <= 200:
             _, contrib = allocation_neff(

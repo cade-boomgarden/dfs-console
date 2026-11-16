@@ -49,21 +49,23 @@ _ROSTER = 9
 # --------------------------------------------------------------------------
 
 def var81(salaries: Sequence[int]) -> int:
-    """81 x population variance of the salaries, in $100 units. Integer, and
-    the exact quantity the solver constrains."""
+    """n^2 x population variance of the salaries, in $100 units (81x for a
+    9-man Classic roster, 36x for Showdown's 6). Integer, and the exact
+    quantity the solver constrains."""
     s = [int(round(v / SAL_UNIT)) for v in salaries]
-    return _ROSTER * sum(v * v for v in s) - sum(s) ** 2
+    return len(s) * sum(v * v for v in s) - sum(s) ** 2
 
 
 def salary_sd(salaries: Sequence[int]) -> float:
     """Population SD of the salaries, in dollars."""
-    return SAL_UNIT * math.sqrt(max(var81(salaries), 0) / 81.0)
+    n = max(len(salaries), 1)
+    return SAL_UNIT * math.sqrt(max(var81(salaries), 0) / float(n * n))
 
 
-def sd_threshold(sd_dollars: float) -> int:
+def sd_threshold(sd_dollars: float, roster: int = _ROSTER) -> int:
     """SD band edge in dollars -> the integer `var81` threshold. A lineup is at
     or under the edge iff var81 <= threshold."""
-    return int(math.floor(81.0 * (sd_dollars / SAL_UNIT) ** 2))
+    return int(math.floor(roster * roster * (sd_dollars / SAL_UNIT) ** 2))
 
 
 @dataclass(frozen=True)
@@ -73,14 +75,15 @@ class SdBands:
     hi: float
     quantiles: tuple[float, float] = (0.2, 0.8)
     n_reference: int = 0
+    roster: int = _ROSTER
 
     @property
     def t_lo(self) -> int:
-        return sd_threshold(self.lo)
+        return sd_threshold(self.lo, self.roster)
 
     @property
     def t_hi(self) -> int:
-        return sd_threshold(self.hi)
+        return sd_threshold(self.hi, self.roster)
 
     def label(self, salaries: Sequence[int]) -> str:
         v = var81(salaries)
@@ -105,7 +108,7 @@ def _add_shape(model: cp_model.CpModel, x: list, players: Sequence[Player],
     model.Add(total == sum(s[i] * x[i] for i in range(len(players))))
     total_sq = model.NewIntVar(0, (salary_cap // SAL_UNIT) ** 2, "sal_sq")
     model.AddMultiplicationEquality(total_sq, [total, total])
-    v81 = _ROSTER * sum(s[i] * s[i] * x[i] for i in range(len(players))) - total_sq
+    v81 = bands.roster * sum(s[i] * s[i] * x[i] for i in range(len(players))) - total_sq
     if shape == "balanced":
         model.Add(v81 <= bands.t_lo)
     elif shape == "middle":
@@ -130,7 +133,7 @@ def reference_bands(
     solved on projection x lognormal noise. Near-optimal and varied -- the
     population the bands are meant to split. One model, objective swapped per
     solve."""
-    cfg = BuildConfig(no_opposing_dst=True)
+    cfg = BuildConfig(no_opposing_dst=not rules.showdown)
     model, x, _ = base_model(players, cfg, rules)
     rng = np.random.default_rng(seed)
     solver = _solver(time_limit, workers=1)
@@ -147,7 +150,7 @@ def reference_bands(
         raise InfeasibleError("could not sample reference lineups for salary bands")
     lo, hi = np.quantile(sds, quantiles)
     return SdBands(lo=float(lo), hi=float(hi), quantiles=quantiles,
-                   n_reference=len(sds))
+                   n_reference=len(sds), roster=rules.size)
 
 
 # --------------------------------------------------------------------------
@@ -253,14 +256,17 @@ def solve_constructions(
     time_limit: float = 5.0,
     workers: int = 1,
     on_progress: Callable[[int, int, int], None] | None = None,
+    rules_for: Callable | None = None,
 ) -> tuple[list[Found], list[dict], SolveStats]:
     """Top `top_x` lineups per construction per objective. Lineups within one
     (construction, objective) differ by at least `min_diff` players. A lineup
     found more than once is stored once and carries every hit.
 
     Returns (lineups, infeasible constructions, stats)."""
-    if not 1 <= min_diff <= _ROSTER:
-        raise ValueError("min_diff must be between 1 and 9")
+    roster = rules.size
+    rules_for = rules_for or _rules_for
+    if not 1 <= min_diff <= roster:
+        raise ValueError(f"min_diff must be between 1 and {roster}")
     if top_x < 1:
         raise ValueError("top_x must be at least 1")
     if any(c.shape != "any" for c in cons) and bands is None:
@@ -273,13 +279,14 @@ def solve_constructions(
 
     for ci, c in enumerate(cons):
         try:
-            stacks, groups = _rules_for(c, players)
+            stacks, groups = rules_for(c, players)
         except InfeasibleError as e:
             infeasible.append({"construction": c.key, "reason": str(e)})
             if on_progress:
                 on_progress(ci + 1, len(cons), stats.solves)
             continue
-        cfg = BuildConfig(stacks=stacks, groups=groups, no_opposing_dst=True)
+        cfg = BuildConfig(stacks=stacks, groups=groups,
+                          no_opposing_dst=not rules.showdown)
         any_found = False
         for obj in objectives:
             # one model per (construction, objective): the uniqueness cuts
@@ -313,7 +320,7 @@ def solve_constructions(
                     found[key] = f
                 f.hits.append(Hit(c.key, obj, rank))
                 any_found = True
-                model.Add(sum(x[i] for i in picked) <= _ROSTER - min_diff)
+                model.Add(sum(x[i] for i in picked) <= roster - min_diff)
         if not any_found:
             infeasible.append({"construction": c.key,
                                "reason": "no legal lineup (salary, roster or stack rules)"})

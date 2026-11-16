@@ -61,6 +61,9 @@ export function SkeletonBrowser({
   }, [depKey, enabled, stats.data]);
 
   const [open, setOpen] = useState<string | null>(null);
+  // a one-game slate (Showdown) opens its only game
+  const only = stats.data?.games.length === 1 ? stats.data.games[0].game_id : null;
+  useEffect(() => { if (only) setOpen(only); }, [only]);
   if (!enabled) return null;
   if (stats.isError) {
     return <div className="text-[11px] text-[var(--amber)]">
@@ -147,12 +150,23 @@ export function SkeletonBrowser({
                           <tr key={sk.key}
                             className={`border-t hairline ${ex ? "opacity-40" : c === 0 ? "opacity-60" : ""}`}>
                             <td className="px-3 py-0.5 whitespace-nowrap">
-                              {sk.qb_team} {sk.n_teammates > 0 && `+${sk.n_teammates}`}
-                              {sk.n_bringback > 0 && ` vs ${sk.n_bringback}`}
-                              {sk.dst_with_qb && <span className="text-[var(--dim)]"> +DST</span>}
-                              <span className="text-[9px] text-[var(--dim)] ml-1.5">
-                                {sk.display.split(" ").slice(1).join(" ")}
-                              </span>
+                              {sk.showdown ? (
+                                <>
+                                  CPT {sk.cpt_team} · {sk.shape_key}
+                                  <span className="text-[9px] text-[var(--dim)] ml-1.5">
+                                    {sk.n_own} {sk.cpt_team} / {sk.n_opp} {sk.opponent}
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  {sk.qb_team} {sk.n_teammates > 0 && `+${sk.n_teammates}`}
+                                  {sk.n_bringback > 0 && ` vs ${sk.n_bringback}`}
+                                  {sk.dst_with_qb && <span className="text-[var(--dim)]"> +DST</span>}
+                                  <span className="text-[9px] text-[var(--dim)] ml-1.5">
+                                    {sk.display.split(" ").slice(1).join(" ")}
+                                  </span>
+                                </>
+                              )}
                             </td>
                             <td className="num text-right px-2">{num(sk.mean)}</td>
                             <td className="num text-right px-2">{num(sk.ceiling)}</td>

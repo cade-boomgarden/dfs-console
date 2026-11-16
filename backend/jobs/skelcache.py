@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..core import showdown as sd
 from ..core.field import expected_payout
 from ..core.skeletons import (Skeleton, SkeletonStats, enumerate_skeletons,
                               skeleton_stats)
@@ -61,8 +62,12 @@ def get_or_build(
         ss = _cache.get(pool_version_id)
         if ss is not None and ss.sims_token == tok:
             return ss
-    skeletons = enumerate_skeletons(games)
-    stats, S, C = skeleton_stats(skeletons, players, sims, col_index)
+    if sd.is_showdown_pool(players):
+        sk_sd = sd.enumerate_skeletons(games)
+        stats, S, C = sd.skeleton_stats(sk_sd, players, sims, col_index)
+    else:
+        skeletons = enumerate_skeletons(games)
+        stats, S, C = skeleton_stats(skeletons, players, sims, col_index)
     ss = SkeletonSet(stats=stats, S=S, C=C,
                      keys=[st.skeleton.key for st in stats], sims_token=tok)
     with _lock:

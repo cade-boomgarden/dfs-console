@@ -22,7 +22,7 @@ import numpy as np
 
 from .allocation import AllocationShares
 from .gamesim import GameEnv, GameEnvCoeffs, simulate_game
-from .scoring import simulate_dst
+from .scoring import simulate_dst, simulate_kicker
 from .variance import Dispersion, StatLine, simulate
 
 
@@ -39,6 +39,7 @@ class SimPlayer:
     variance_scale: float = 1.0          # per-player override (questionable tag etc.)
     team: str = ""                       # abbreviation; matches GameEnv teams
     shares: AllocationShares | None = None   # weekly_phi share noise (item 14)
+    k_stats: dict | None = None          # kicker: fg / xpt (FantasyPros)
 
 
 def _game_seed(global_seed: int, game_id: str) -> int:
@@ -90,7 +91,11 @@ def build_sims(
 
         for i in idxs:
             p = players[i]
-            if p.position == "DST":
+            if p.position == "K":
+                s = p.k_stats or {}
+                col = simulate_kicker(rng, n_sims, s.get("fg", 0.0) or 0.0,
+                                      s.get("xpt", 0.0) or 0.0).astype(np.float32)
+            elif p.position == "DST":
                 s = p.dst_stats or {}
                 col = simulate_dst(
                     rng, n_sims,

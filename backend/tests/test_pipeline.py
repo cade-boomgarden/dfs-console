@@ -35,6 +35,8 @@ def test_ingest_simulate_build_end_to_end():
     pool = db.query(PoolPlayer).filter_by(pool_version_id=pv_id).all()
     dsts = [p for p in pool if p.position == "DST"]
     assert dsts and all(p.draftable_ids for p in pool)
+    assert result["slate_type"] == "classic"
+    assert not any(p.position == "K" or p.cpt_salary is not None for p in pool)
     with_stats = [p for p in pool if p.stats]
     assert len(with_stats) > 50, "FP projections should join to most of the pool"
 

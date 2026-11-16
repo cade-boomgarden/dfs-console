@@ -12,10 +12,11 @@ from sqlalchemy.orm import Session
 from ..auth.security import current_user
 from ..core.evaluator import evaluate
 from ..core.skeletons import enumerate_skeletons
+from ..core import showdown as sd
 from ..core.solver import (BuildConfig, InfeasibleError, RosterRules, build,
-                           classify, Lineup)
+                           classify, Lineup, showdown_rules)
 from ..core.validator import validate as validate_lineup
-from ..jobs.poolutil import load_adjustments, to_core_players
+from ..jobs.poolutil import load_adjustments, role_mult, to_core_players
 from ..models.db import get_db
 from ..models.models import Game, LineupRow, LineupSet, PoolPlayer, User
 from .deps import require_pool, sims_for_pool
@@ -29,6 +30,10 @@ class LineupIn(BaseModel):
                                    # field when the field job has run (item 16)
 
 
+CLASSIC_SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"]
+SHOWDOWN_SLOTS = ["CPT", "FLEX", "FLEX", "FLEX", "FLEX", "FLEX"]
+
+
 def _core_pool(db: Session, slate_id: int, user_id: int):
     pv = require_pool(db, slate_id)
     pool = db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()
@@ -37,14 +42,33 @@ def _core_pool(db: Session, slate_id: int, user_id: int):
     return pv, players, adj
 
 
+def _layout(players) -> tuple[list[str], RosterRules, bool]:
+    if sd.is_showdown_pool(players):
+        return SHOWDOWN_SLOTS, showdown_rules(), True
+    return CLASSIC_SLOTS, RosterRules(), False
+
+
+def _entry(slot: str, pid) -> str:
+    """Request player id in a slot -> entry id (the CPT slot is the captain
+    entry)."""
+    return sd.cpt_id(pid) if slot == "CPT" else str(pid)
+
+
+def _slotted(players, body_ids: list) -> list:
+    slots, _, _ = _layout(players)
+    by_id = {p.id: p for p in players}
+    return [by_id.get(_entry(s, pid)) if pid else None
+            for s, pid in zip(slots, body_ids)]
+
+
 @router.post("/validate")
 def validate(slate_id: int, body: LineupIn, db: Session = Depends(get_db),
              user: User = Depends(current_user)):
     pv, players, _ = _core_pool(db, slate_id, user.id)
-    by_id = {p.id: p for p in players}
-    rules = RosterRules()
-    slotted = [by_id.get(str(pid)) if pid else None for pid in body.player_ids]
-    return {"issues": validate_lineup(slotted, rules)}
+    _, rules, showdown = _layout(players)
+    slotted = _slotted(players, body.player_ids)
+    return {"issues": validate_lineup(slotted, rules,
+                                      no_opposing_dst=not showdown)}
 
 
 @router.post("/evaluate")
@@ -52,12 +76,13 @@ def evaluate_lineup(slate_id: int, body: LineupIn, db: Session = Depends(get_db)
                     user: User = Depends(current_user)):
     pv, players, _ = _core_pool(db, slate_id, user.id)
     sims, col_index = sims_for_pool(pv.id)
-    by_id = {p.id: p for p in players}
-    ids = [str(pid) for pid in body.player_ids if pid]
-    picked = [by_id[i] for i in ids if i in by_id]
+    slots, rules, _ = _layout(players)
+    picked = [p for p in _slotted(players, body.player_ids) if p is not None]
+    ids = [p.id for p in picked]
     lt = ""
-    if len(picked) == 9:
-        lt = classify(Lineup(players=tuple(picked), slots=tuple(str(i) for i in range(9))))
+    if len(picked) == rules.size:
+        lt = classify(Lineup(players=tuple(picked),
+                             slots=tuple(str(i) for i in range(rules.size))))
     field_dist, curve, fee = None, None, 0.0
     if body.contest_id:
         from ..jobs import fieldcache
@@ -105,11 +130,12 @@ def _objective_values(players, pool_rows, adj, objective: str, pv_id: int):
     raw = {str(pp.player_id): pp for pp in pool_rows}
     out = []
     for p in players:
-        pp = raw[p.id]
+        pp = raw[p.base]
+        r = role_mult(p)      # captain entries score 1.5x the pool row
         base = {"mean": pp.projection, "ceiling": pp.ceiling,
-                "median": med.get(p.id, pp.projection)}[objective]
+                "median": med.get(p.base, pp.projection)}[objective]
         a = adj.get(pp.player_id, {})
-        val = base * float(a.get("multiplier", 1.0)) + float(a.get("delta", 0.0))
+        val = (base * float(a.get("multiplier", 1.0)) + float(a.get("delta", 0.0))) * r
         out.append(replace(p, projection=round(max(val, 0.0), 2)))
     return out
 
@@ -124,15 +150,26 @@ def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
     pv, players, adj = _core_pool(db, slate_id, user.id)
     pool_rows = db.query(PoolPlayer).filter_by(pool_version_id=pv.id).all()
     players = _objective_values(players, pool_rows, adj, body.objective, pv.id)
-    locked = frozenset(str(pid) for pid in body.player_ids if pid)
+    slots, rules, showdown = _layout(players)
     pool_excl = {str(pid) for pid, a in adj.items() if a.get("exclude")}
     fades = {str(pid) for pid in body.fade_ids}
-    excluded = frozenset((pool_excl | fades) - locked)
+    if showdown:
+        # lock the captain entry for the CPT slot; a FLEX pick locks the
+        # player and drops his captain entry, so he stays in FLEX
+        locked = frozenset(_entry(s, pid) for s, pid in zip(slots, body.player_ids) if pid)
+        flex_cpt = {sd.cpt_id(pid) for s, pid in zip(slots, body.player_ids)
+                    if pid and s != "CPT"}
+        bases = {sd.base_of(i) for i in locked}
+        excluded = frozenset(((pool_excl | fades) - bases) | flex_cpt)
+    else:
+        locked = frozenset(str(pid) for pid in body.player_ids if pid)
+        excluded = frozenset((pool_excl | fades) - locked)
     try:
         lineups = build(players, BuildConfig(
             n_lineups=min(max(body.n, 1), 5),
             locked_ids=locked, excluded_ids=excluded, max_overlap=8,
-        ))
+            no_opposing_dst=not showdown,
+        ), rules)
     except InfeasibleError as e:
         return {"lineups": [], "error": str(e)}
     if not lineups:
@@ -140,7 +177,7 @@ def complete(slate_id: int, body: CompleteIn, db: Session = Depends(get_db),
             "No valid lineup completes these slots with the current fades "
             "and pool excludes (salary, stack, or position rules).")}
     return {"lineups": [
-        [{"slot": s, "player_id": int(p.id), "name": p.name}
+        [{"slot": s, "player_id": int(p.base), "name": p.name}
          for s, p in zip(lu.slots, lu.players)]
         for lu in lineups
     ]}
@@ -189,7 +226,6 @@ def save(slate_id: int, body: SaveIn, db: Session = Depends(get_db),
         sims_cached = sims_for_pool(pv.id)
     except Exception:
         pass
-    by_id = {p.id: p for p in players}
     ls = _hand_set(db, slate_id, user.id, pv.id)
     if ls is None:
         ls = LineupSet(user_id=user.id, slate_id=slate_id, pool_version_id=pv.id,
@@ -197,14 +233,14 @@ def save(slate_id: int, body: SaveIn, db: Session = Depends(get_db),
                        sims_blob_key=pv.sims_blob_key)
         db.add(ls)
         db.flush()
-    slots = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"]
-    picked = [(s, by_id.get(str(pid))) for s, pid in zip(slots, body.player_ids)]
+    slots, rules, _ = _layout(players)
+    picked = list(zip(slots, _slotted(players, body.player_ids)))
     salary = sum(p.salary for _, p in picked if p)
     ev = {}
     proj = ceil = own = 0.0
     lt = ""
     ids = [p.id for _, p in picked if p]
-    if sims_cached and len(ids) == 9:
+    if sims_cached and len(ids) == rules.size:
         sims, col_index = sims_cached
         core = [p for _, p in picked if p]
         lt = classify(Lineup(players=tuple(core), slots=tuple(slots)))
@@ -217,7 +253,7 @@ def save(slate_id: int, body: SaveIn, db: Session = Depends(get_db),
     row = LineupRow(
         lineup_set_id=ls.id,
         ordinal=len(ls.lineups),
-        slots=[{"slot": s, "player_id": int(p.id) if p else None,
+        slots=[{"slot": s, "player_id": int(p.base) if p else None,
                 "name": p.name if p else None} for s, p in picked],
         salary=salary, projection=round(proj, 2), ceiling=round(ceil, 2),
         ownership=round(own, 1), lineup_type=lt,

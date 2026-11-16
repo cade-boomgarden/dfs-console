@@ -20,7 +20,7 @@ structural spread) is a measurement, not an argument.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -28,9 +28,10 @@ from ..core.evaluator import evaluate, n_eff, portfolio_scores
 from ..core.field import batch_field_metrics
 from ..core.skeletons import (Skeleton, allocation_neff, compose_weights,
                               skeleton_of)
+from ..core import showdown as sd
 from ..core.solver import (BuildConfig, GroupRule, InfeasibleError, Lineup,
                            Player, Position, RosterRules, StackRule, build,
-                           classify)
+                           classify, showdown_rules)
 from ..models.db import SessionLocal
 from ..models.models import Game, LineupRow, LineupSet, PoolVersion
 from ..models.models import PoolPlayer
@@ -39,6 +40,8 @@ from .runner import JobCancelled, JobContext, register
 
 
 def _skeleton_rules(sk: Skeleton, players: list[Player]) -> tuple[list[StackRule], list[GroupRule]]:
+    if isinstance(sk, sd.SdSkeleton):
+        return sd.skeleton_rules(sk, players)
     qb_ids = frozenset(p.id for p in players
                        if p.team == sk.qb_team and p.position is Position.QB)
     if not qb_ids:
@@ -61,6 +64,10 @@ def _skeleton_rules(sk: Skeleton, players: list[Player]) -> tuple[list[StackRule
     elif qb_dst and dst_ids - qb_dst:
         groups.append(GroupRule(player_ids=qb_dst, max_from=0, label="DST elsewhere"))
     return stacks, groups
+
+
+def _skeleton_of(lu: Lineup):
+    return sd.skeleton_of(lu) or skeleton_of(lu)
 
 
 @dataclass
@@ -104,18 +111,26 @@ def _load_env(db, payload: dict) -> BuildEnv:
     min_proj = float(cfg.get("min_projection", 0.0))
     players = [p for p in players if p.projection >= min_proj or p.id in locked]
 
-    rules = RosterRules(
-        salary_cap=int(cfg.get("salary_cap", 50_000)),
-        min_salary=int(cfg.get("min_salary", 0)),
-        min_games=int(cfg.get("min_games", 2)),
-        max_per_team=cfg.get("max_per_team"),
-    )
+    showdown = sd.is_showdown_pool(players)
+    if showdown:
+        rules = showdown_rules(salary_cap=int(cfg.get("salary_cap", 50_000)),
+                               min_salary=int(cfg.get("min_salary", 0)))
+    else:
+        rules = RosterRules(
+            salary_cap=int(cfg.get("salary_cap", 50_000)),
+            min_salary=int(cfg.get("min_salary", 0)),
+            min_games=int(cfg.get("min_games", 2)),
+            max_per_team=cfg.get("max_per_team"),
+        )
     base_cfg = dict(
-        position_limits={k: int(v) for k, v in
-                         (cfg.get("position_limits") or {}).items()},
+        position_limits=({} if showdown else
+                         {k: int(v) for k, v in
+                          (cfg.get("position_limits") or {}).items()}),
         locked_ids=locked,
         max_ownership=cfg.get("max_ownership"),
-        no_opposing_dst=bool(cfg.get("no_opposing_dst", True)),
+        # Showdown rosters routinely carry a DST against the other side's
+        # skill players; the Classic default does not carry over
+        no_opposing_dst=bool(cfg.get("no_opposing_dst", not showdown)),
     )
 
     # --- skeleton allocation (sections 6a/6b) --------------------------------
@@ -188,6 +203,11 @@ def _stage_a(
     seen: set[frozenset] = set()
     candidates: list[Lineup] = []
     by_skeleton: dict[str, int] = {}
+    # Showdown has ~10 constructions over a ~40-player pool, so a re-sampled
+    # objective mostly re-finds the same optimum; cut the construction's
+    # earlier finds out of each solve (Classic's ~600 skeletons don't need it)
+    showdown = env.rules.showdown
+    found_in: dict[str, list[frozenset]] = {}
 
     attempts = 0
     while len(candidates) < n_candidates and attempts < n_candidates * 3:
@@ -199,17 +219,14 @@ def _stage_a(
         # block-averaged sim columns as the objective vector (1g)
         draw = nprng.choice(sims.shape[0], size=block, replace=False)
         obj = sims[np.ix_(draw, cols_of)].mean(axis=0)
-        sampled = [
-            Player(id=p.id, name=p.name, position=p.position, team=p.team,
-                   opponent=p.opponent, game_id=p.game_id, salary=p.salary,
-                   projection=float(obj[i]), ceiling=p.ceiling, floor=p.floor,
-                   stddev=p.stddev, ownership=p.ownership)
-            for i, p in enumerate(players)
-        ]
+        sampled = [replace(p, projection=float(obj[i]))
+                   for i, p in enumerate(players)]
         try:
             stacks, groups = _skeleton_rules(sk, sampled)
             got = build(sampled, BuildConfig(
-                n_lineups=1, stacks=stacks, groups=groups, **env.base_cfg,
+                n_lineups=1, stacks=stacks, groups=groups,
+                avoid=tuple(found_in.get(sk.key, ())) if showdown else (),
+                **env.base_cfg,
             ), env.rules)
         except InfeasibleError:
             weights[usable.index(sk)] *= 0.5   # stop drawing broken skeletons
@@ -221,6 +238,7 @@ def _stage_a(
         if key in seen:
             continue
         seen.add(key)
+        found_in.setdefault(sk.key, []).append(key)
         candidates.append(lu)
         by_skeleton[sk.key] = by_skeleton.get(sk.key, 0) + 1
     return candidates, by_skeleton
@@ -262,20 +280,25 @@ def _stage_b(
             continue
         ok = True
         for p in lu.players:
-            cap = per_expo.get(p.id, max_expo)
-            if cap is not None and usage.get(p.id, 0) >= cap * n_lineups:
+            # exposure is per player: a Showdown captain and FLEX entry share it
+            cap = per_expo.get(p.base, max_expo)
+            if cap is not None and usage.get(p.base, 0) >= cap * n_lineups:
                 ok = False
                 break
-        qb = next(p for p in lu.players if p.position is Position.QB)
-        if max_repeat_qb is not None and qb_usage.get(qb.id, 0) >= int(max_repeat_qb):
+        # the repeat cap reads "per QB" on Classic and "per captain" on Showdown
+        anchor = next((p for p in lu.players if p.slot_role == "CPT"), None) \
+            or next((p for p in lu.players if p.position is Position.QB), None)
+        if (anchor is not None and max_repeat_qb is not None
+                and qb_usage.get(anchor.id, 0) >= int(max_repeat_qb)):
             ok = False
         if not ok:
             continue
         selected.append(lu)
         sel_idx.append(int(i))
         for p in lu.players:
-            usage[p.id] = usage.get(p.id, 0) + 1
-        qb_usage[qb.id] = qb_usage.get(qb.id, 0) + 1
+            usage[p.base] = usage.get(p.base, 0) + 1
+        if anchor is not None:
+            qb_usage[anchor.id] = qb_usage.get(anchor.id, 0) + 1
     return selected, sel_idx
 
 
@@ -330,7 +353,7 @@ def build_job(job_id: int) -> None:
         shape_mix: dict[str, int] = {}
         skeleton_mix: dict[str, int] = {}
         for lu in selected:
-            sk = skeleton_of(lu)
+            sk = _skeleton_of(lu)
             label = sk.shape_label if sk else "NO_QB"
             shape_mix[label] = shape_mix.get(label, 0) + 1
             if sk:
@@ -383,7 +406,7 @@ def build_job(job_id: int) -> None:
         db.add(ls)
         db.flush()
         for ordn, lu in enumerate(selected):
-            sk = skeleton_of(lu)
+            sk = _skeleton_of(lu)
             ev = evaluate([p.id for p in lu.players], env.sims, env.col_index,
                           salaries, ownership, classify(lu),
                           salary_cap=env.rules.salary_cap, with_marginals=False)
@@ -400,7 +423,9 @@ def build_job(job_id: int) -> None:
                     evaluation["roi"] = round(float(field_metrics["roi"][ci]), 4)
             db.add(LineupRow(
                 lineup_set_id=ls.id, ordinal=ordn,
-                slots=[{"slot": s, "player_id": p.id, "name": p.name}
+                # stored slots keep the plain player id; the CPT slot marks
+                # the captain entry (core.showdown.entry_ids reverses it)
+                slots=[{"slot": s, "player_id": p.base, "name": p.name}
                        for s, p in zip(lu.slots, lu.players)],
                 salary=lu.salary, projection=round(ev.projection, 2),
                 ceiling=round(ev.ceiling, 2), ownership=round(ev.cumulative_ownership, 1),
@@ -468,7 +493,7 @@ def block_sweep_job(job_id: int) -> None:
                 scores, sel_idx, len(candidates), nprng)
             shape_mix: dict[str, int] = {}
             for lu in selected:
-                sk = skeleton_of(lu)
+                sk = _skeleton_of(lu)
                 lbl = sk.shape_label if sk else "NO_QB"
                 shape_mix[lbl] = shape_mix.get(lbl, 0) + 1
             row = {

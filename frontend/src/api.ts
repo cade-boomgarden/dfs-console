@@ -25,6 +25,8 @@ export interface PoolPlayer {
   game_key: string; salary: number; status: string | null; dvp_rank: number | null;
   projection: number; floor: number; ceiling: number; stddev: number;
   ownership: number; implied_opp_total: number | null; value: number;
+  /** Showdown only: captain salary (1.5x) and captain ownership. */
+  cpt_salary: number | null; cpt_ownership: number | null;
   adjustments: Record<string, number | boolean>;
 }
 export interface ProfileFeature { value: number; pct: number | null; n: number | null }
@@ -62,8 +64,10 @@ export interface ProfileStatus {
 export interface SlateSummary {
   id: number; name: string; draft_group_id: number; season: number | null;
   week: number | null; start_time: string | null; game_count: number;
+  slate_type: SlateType;
   pool_version_id: number | null; has_sims: boolean;
 }
+export type SlateType = "classic" | "showdown";
 export interface Evaluation {
   projection: number; salary: number; salary_remaining: number;
   floor: number; median: number; ceiling: number; p95: number; stddev: number;
@@ -85,6 +89,8 @@ export interface LineupDTO {
 }
 
 export interface SkeletonStat {
+  /** Showdown rows also carry cpt_team / n_own / n_opp / shape_key. */
+  showdown?: boolean; cpt_team?: string; n_own?: number; n_opp?: number; shape_key?: string;
   qb_team: string; opponent: string; game_id: string;
   n_teammates: number; n_bringback: number; dst_with_qb: boolean;
   key: string; display: string; feasible: boolean; salary: number;

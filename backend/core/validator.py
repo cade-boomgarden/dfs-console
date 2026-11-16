@@ -23,9 +23,11 @@ def validate(
     for slot, p in filled:
         if p.position not in slot.positions:
             issues.append(f"{p.name} is not eligible for {slot.name}")
+        elif rules.showdown and (slot.name == "CPT") != (p.slot_role == "CPT"):
+            issues.append(f"{p.name} is not eligible for {slot.name}")
 
-    # duplicates
-    ids = [p.id for _, p in filled]
+    # duplicates (by player: a Showdown captain and FLEX entry are one man)
+    ids = [p.base for _, p in filled]
     if len(ids) != len(set(ids)):
         issues.append("Duplicate player")
 
@@ -33,6 +35,11 @@ def validate(
     salary = sum(p.salary for _, p in filled)
     if salary > rules.salary_cap:
         issues.append(f"Over cap by ${salary - rules.salary_cap:,}")
+
+    # Showdown: players from both teams, once complete
+    if rules.showdown and len(filled) == rules.size:
+        if len({p.team for _, p in filled}) < 2:
+            issues.append("Needs players from both teams")
 
     # min games -- only meaningful once complete
     if len(filled) == rules.size:

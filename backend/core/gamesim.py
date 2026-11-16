@@ -57,8 +57,8 @@ from pathlib import Path
 import numpy as np
 
 from .allocation import AllocationShares
-from .scoring import (DST_FR, DST_INT, DST_SACK, DST_SAFETY, DST_TD,
-                      dst_points_allowed_score)
+from .scoring import (DST_FR, DST_INT, DST_SACK, DST_SAFETY, DST_TD, K_XP,
+                      dst_points_allowed_score, kicker_fg_points)
 from .variance import (BONUS, FUMBLE_LOST, INT, PASS_BONUS_AT, PASS_TD,
                        PASS_YD, REC, REC_BONUS_AT, REC_TD, REC_YD, RET_TD,
                        RUSH_BONUS_AT, RUSH_TD, RUSH_YD, TWO_PT, Dispersion,
@@ -490,12 +490,15 @@ def simulate_game(
 
     by_team: dict[str, list] = {}
     dsts: list = []
+    kickers: list = []
     unknown: list = []
     for i, p in players:
         if p.team not in tl:
             unknown.append((i, p))
         elif p.position == "DST":
             dsts.append((i, p))
+        elif p.position == "K":
+            kickers.append((i, p))
         else:
             by_team.setdefault(p.team, []).append((i, p))
 
@@ -628,18 +631,9 @@ def simulate_game(
         # takeaways are the *opponent's drawn events* (same plays), calibrated
         # to the FP mean: thin when the drawn events exceed it, top up with a
         # Poisson residual when depth players outside the pool leave a gap
-        def _match_mean(events: np.ndarray, target: float) -> np.ndarray:
-            em = float(events.mean())
-            if target <= 0:
-                return np.zeros(n)
-            if em > target:
-                return rng.binomial(events.astype(np.int64),
-                                    target / em).astype(float)
-            return events + rng.poisson(target - em, n)
-
-        ints = _match_mean(turnovers[opp_team]["ints"],
+        ints = _match_mean(rng, turnovers[opp_team]["ints"],
                            s.get("def_int", 0.0) or 0.0)
-        frs = _match_mean(turnovers[opp_team]["fums"],
+        frs = _match_mean(rng, turnovers[opp_team]["fums"],
                           s.get("def_fr", 0.0) or 0.0)
         takeaways = ints + frs
         td_mean = s.get("def_td", 0.0) or 0.0
@@ -661,16 +655,53 @@ def simulate_game(
             pts = m + (pts - m) * p.variance_scale
         out[i] = pts
 
+    # --- kickers (Showdown): consume the team's drawn score and TDs ---
+    # Extra points ride the drawn offensive TDs; field goals are the points
+    # the drawn score leaves after TDs and PATs, in threes. So a kicker gains
+    # with his team's score but loses when drives finish in the end zone --
+    # the K-vs-own-QB tension is an output, not a fitted rho. Both counts are
+    # then calibrated to the FantasyPros means (thin or Poisson top-up, as
+    # for DST takeaways); field goals are distance-scored.
+    for i, p in kickers:
+        t = tl[p.team]
+        s = p.k_stats or {}
+        otd = t["pass_tds"] + t["rush_tds"]
+        xp = _match_mean(rng, otd, s.get("xpt", 0.0) or 0.0)
+        left = np.maximum(t["pts"] - 6.0 * otd - xp, 0.0)
+        fg = _match_mean(rng, np.floor(left / 3.0), s.get("fg", 0.0) or 0.0)
+        pts = kicker_fg_points(rng, fg) + xp * K_XP
+        if p.variance_scale != 1.0:
+            m = float(pts.mean())
+            pts = np.maximum(m + (pts - m) * p.variance_scale, 0.0)
+        out[i] = pts
+
     # players whose team matches neither side: independent fallback
     for i, p in unknown:
         out[i] = _independent_col(rng, n, p)
     return out
 
 
+def _match_mean(rng: np.random.Generator, events: np.ndarray,
+                target: float) -> np.ndarray:
+    """Calibrate drawn event counts to a projected mean: binomial thinning
+    when the draws run high, a Poisson top-up when they run low."""
+    n = events.shape[0]
+    em = float(events.mean())
+    if target <= 0:
+        return np.zeros(n)
+    if em > target:
+        return rng.binomial(events.astype(np.int64), target / em).astype(float)
+    return events + rng.poisson(target - em, n)
+
+
 def _independent_col(rng: np.random.Generator, n: int, p) -> np.ndarray:
     """Legacy independent draw for one player (fallback path)."""
-    from .scoring import simulate_dst
+    from .scoring import simulate_dst, simulate_kicker
     from .variance import simulate
+    if p.position == "K":
+        s = p.k_stats or {}
+        return simulate_kicker(rng, n, s.get("fg", 0.0) or 0.0,
+                               s.get("xpt", 0.0) or 0.0)
     if p.position == "DST":
         s = p.dst_stats or {}
         return simulate_dst(

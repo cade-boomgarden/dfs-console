@@ -14,7 +14,7 @@ from .profilecards import card
 router = APIRouter(prefix="/api/slates/{slate_id}/pool", tags=["pool"])
 
 ADJ_KINDS = {"lock", "exclude", "delta", "multiplier", "ownership",
-             "min_exposure", "max_exposure", "variance_scale"}
+             "cpt_ownership", "min_exposure", "max_exposure", "variance_scale"}
 
 
 @router.get("")
@@ -27,12 +27,14 @@ def get_pool(slate_id: int, db: Session = Depends(get_db),
     return {
         "pool_version_id": pv.id,
         "has_sims": bool(pv.sims_blob_key),
+        "showdown": any(p.cpt_salary is not None for p in pool),
         "players": [{
             "player_id": p.player_id, "name": p.name, "position": p.position,
             "team": p.team, "opponent": p.opponent, "game_key": p.game_key,
             "salary": p.salary, "status": p.status, "dvp_rank": p.dvp_rank,
             "projection": p.projection, "floor": p.floor, "ceiling": p.ceiling,
             "stddev": p.stddev, "ownership": p.ownership,
+            "cpt_salary": p.cpt_salary, "cpt_ownership": p.cpt_ownership,
             "implied_opp_total": p.implied_opp_total,
             "value": round(p.projection / max(p.salary, 1) * 1000, 2),
             "adjustments": adj.get(p.player_id, {}),

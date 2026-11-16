@@ -52,6 +52,44 @@ def simulate_dst(
     return pts
 
 
+# --- kickers (Showdown only: DK Classic has no K slot) -------------------------
+# DK: FG 0-39 yds 3, 40-49 yds 4, 50+ yds 5; extra point 1. Distance shares of
+# MADE field goals, nflverse player stats 2022-2025 (3,849 makes): 0-39 55.4%,
+# 40-49 26.0%, 50+ 18.6%. A made FG is worth 3.63 DK points on average.
+K_FG_PTS = (3.0, 4.0, 5.0)
+K_FG_SHARE = (0.554, 0.260, 0.186)
+K_XP = 1.0
+K_FG_AVG = sum(p * s for p, s in zip(K_FG_PTS, K_FG_SHARE))
+
+
+def kicker_projection(stats: dict | None) -> float:
+    """DK points from a FantasyPros kicker line (fg = made FGs, xpt = made
+    extra points). FP's own `points` uses a flat 3 per FG, which misprices
+    DK's distance bonus."""
+    stats = stats or {}
+    fg = float(stats.get("fg", 0.0) or 0.0)
+    xp = float(stats.get("xpt", 0.0) or 0.0)
+    return round(fg * K_FG_AVG + xp * K_XP, 2)
+
+
+def kicker_fg_points(rng: np.random.Generator, made: np.ndarray) -> np.ndarray:
+    """Distance-scored DK points for `made` field goals per sim."""
+    made = np.asarray(made, dtype=np.int64)
+    long_ = rng.binomial(made, K_FG_SHARE[2])
+    mid = rng.binomial(made - long_, K_FG_SHARE[1] / (1.0 - K_FG_SHARE[2]))
+    short = made - long_ - mid
+    return (short * K_FG_PTS[0] + mid * K_FG_PTS[1]
+            + long_ * K_FG_PTS[2]).astype(float)
+
+
+def simulate_kicker(rng: np.random.Generator, n: int, fg: float,
+                    xpt: float) -> np.ndarray:
+    """Independent kicker draw (no game environment): Poisson makes at the
+    FantasyPros means, distance-scored."""
+    made = rng.poisson(max(fg, 0.0), n)
+    return kicker_fg_points(rng, made) + rng.poisson(max(xpt, 0.0), n) * K_XP
+
+
 # --- offensive DK points from a box score -------------------------------------
 # Used for display (player game logs) and the Vegas fit; the sims score
 # components per draw in variance.py.
