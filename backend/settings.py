@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     n_sims: int = 50_000              # section 15j sizing
     sims_seed: int = 20260816
 
+    # --- contest results -----------------------------------------------------
+    dk_username: str = "cb1991"           # marks the user's rows in standings
+    lf_min_entries: int = 10_000          # large field: total entries at least this
+    mme_min_entries_per_user: int = 20    # MME: per-user entry max at least this
+
     # --- environment ---------------------------------------------------------
     env: str = "dev"
 

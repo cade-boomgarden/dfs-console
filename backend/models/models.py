@@ -208,7 +208,12 @@ class LineupRow(Base):
 class Contest(Base):
     __tablename__ = "contests"
     id: Mapped[int] = mapped_column(primary_key=True)
-    slate_id: Mapped[int] = mapped_column(ForeignKey("slates.id"), index=True)
+    # null when the draft group was never ingested as a slate (a contest
+    # imported from results only); draft_group_id is always set then
+    slate_id: Mapped[int | None] = mapped_column(ForeignKey("slates.id"), index=True,
+                                                 nullable=True)
+    draft_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    slate_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
     contest_key: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(256), default="")
     entry_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -216,6 +221,10 @@ class Contest(Base):
     max_entries_per_user: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_payouts: Mapped[float | None] = mapped_column(Float, nullable=True)
     payout_curve: Mapped[list] = mapped_column(JSON, default=list)
+    # results import: what the standings file covered. total_entries,
+    # rows, top_n (contiguous top block), captured_own_pct, min_cash_rank,
+    # full_field, max_entries_source (dk_api | name | observed)
+    capture: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     build_profile_id: Mapped[int | None] = mapped_column(ForeignKey("build_profiles.id"), nullable=True)
     __table_args__ = (UniqueConstraint("slate_id", "contest_key"),)
 
@@ -242,6 +251,26 @@ class OwnershipObservation(Base):
     position: Mapped[str] = mapped_column(String(8), default="")
     drafted_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     fpts: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # captured top-block lineups containing the player (Showdown: in this slot)
+    lineup_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class ContestLineup(Base):
+    """One standings row: the top block of a contest, the user's entries and
+    the cut-line row. Player ids are in slot order, null when unmatched."""
+    __tablename__ = "contest_lineups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    contest_id: Mapped[int] = mapped_column(ForeignKey("contests.id"), index=True)
+    entry_id: Mapped[str] = mapped_column(String(32))
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    username: Mapped[str] = mapped_column(String(64), default="")
+    points: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lineup: Mapped[str] = mapped_column(Text, default="")
+    slots: Mapped[list] = mapped_column(JSON, default=list)
+    player_ids: Mapped[list] = mapped_column(JSON, default=list)
+    is_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    top_block: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("contest_id", "entry_id"),)
 
 
 class ProfileSnapshot(Base):
