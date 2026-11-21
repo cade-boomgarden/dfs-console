@@ -5,6 +5,8 @@ import { api, Evaluation, PoolPlayer } from "../api";
 import { Btn, DistStrip, Field, money, num } from "../ui";
 import { PlayerHover, usePoolProfiles } from "../components/PlayerCard";
 import { EyeButton, PlayerDrawer } from "../components/PlayerDetail";
+import { CopyLineup } from "../components/CopyLineup";
+import { CopyRow } from "../lineupCopy";
 
 const CLASSIC_SLOTS = ["QB", "RB", "RB", "WR", "WR", "WR", "TE", "FLEX", "DST"];
 // Showdown: the captain scores 1.5x at 1.5x salary; every position is eligible
@@ -114,6 +116,13 @@ export default function Builder() {
     const p = id === null ? undefined : byId.get(id);
     return a + (p ? asSlot(p, i).salary : 0);
   }, 0);
+  // the lineup as the copy button formats it: slot-adjusted (CPT 1.5x)
+  const copyRows: CopyRow[] = SLOTS.map((s, i) => {
+    const raw = slots[i] !== null ? byId.get(slots[i]!) : undefined;
+    if (!raw) return { slot: s, name: null, salary: 0, projection: 0, ownership: 0 };
+    const p = asSlot(raw, i);
+    return { slot: s, name: p.name, salary: p.salary, projection: p.projection, ownership: p.ownership };
+  });
   const remaining = SALARY_CAP - salary;
   const openSlots = SLOTS.length - picked.length;
   // floored: the average you can spend on each open slot and still fit
@@ -192,7 +201,10 @@ export default function Builder() {
     <div className="grid grid-cols-[300px_1fr_280px] gap-4">
       {/* slot rail */}
       <div className="space-y-1">
-        <h2 className="eyebrow mb-2">Lineup</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="eyebrow">Lineup</h2>
+          <CopyLineup rows={copyRows} disabled={picked.length === 0} />
+        </div>
         {SLOTS.map((s, i) => {
           const raw = slots[i] !== null ? byId.get(slots[i]!) : null;
           const p = raw ? asSlot(raw, i) : null;
