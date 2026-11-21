@@ -19,8 +19,8 @@ from backend.jobs.runner import JobContext                    # noqa: E402
 from backend.jobs import salaries                             # noqa: E402
 from backend.jobs.salaries import backfill_week               # noqa: E402
 from backend.models.db import Base, SessionLocal, engine      # noqa: E402
-from backend.models.models import (PlayerCanonical, PoolPlayer,  # noqa: E402
-                                   SalaryHistory, Slate)
+from backend.models.models import (FpProjection, PlayerCanonical,  # noqa: E402
+                                   PoolPlayer, SalaryHistory, Slate)
 from backend.sources import draftkings as dk                  # noqa: E402
 
 FIX = Path(__file__).parent / "fixtures"
@@ -203,6 +203,49 @@ def test_backfill_rejects_non_classic_group():
     db.close()
 
 
+def test_ingest_and_backfill_record_league_wide_projections():
+    """Every FP player with stats is kept for the week, not just slate teams."""
+    db = SessionLocal()
+    from backend.sources import fantasypros as fp
+    expected = {int(float(r["fpid"])) for r in fp.parse_projections(FP)
+                if r.get("stats") and r.get("fpid")}
+    slate_teams = {h.team for h in db.query(SalaryHistory).filter_by(season=2026, week=1)}
+    for wk in (1, 2):                              # 1 = ingest, 2 = salary backfill
+        rows = db.query(FpProjection).filter_by(season=2026, week=wk).all()
+        assert {r.fpid for r in rows} == expected
+        assert {r.team for r in rows} - slate_teams, "off-slate teams should be stored"
+    # a slate player's league-wide row carries the same number the pool used
+    allen = db.query(PlayerCanonical).filter_by(player_dk_id=11370).one()
+    from backend.jobs.poolutil import current_pool_version
+    pv = current_pool_version(db, SLATE["id"])
+    pool_proj = db.query(PoolPlayer).filter_by(pool_version_id=pv.id, player_id=allen.id).one().projection
+    fp_row = db.query(FpProjection).filter_by(season=2026, week=1, fpid=allen.fpid).one()
+    assert fp_row.projection == round(pool_proj, 2)
+    db.close()
+
+
+def test_projection_backfill_records_weeks_without_backfilled_salaries():
+    """An ingested-only (or empty) week still gets the league-wide table; a
+    re-run replaces the week rather than duplicating it."""
+    db = SessionLocal()
+
+    class Ctx(NullCtx):
+        def payload(self):
+            return {"season": 2026, "weeks": [5]}
+
+    for _ in range(2):
+        res = salaries.run_projection_backfill(Ctx(), lambda s, w: FP, db=db)
+    assert "projection_error" not in res[0] and res[0]["projected"] == 0
+    n = db.query(FpProjection).filter_by(season=2026, week=5).count()
+    assert n == res[0]["league_projected"] > 0
+
+    thin = dict(FP, players=FP["players"][:50])
+    res = salaries.run_projection_backfill(Ctx(), lambda s, w: thin, db=db)
+    assert "not available" in res[0]["projection_error"]
+    assert db.query(FpProjection).filter_by(season=2026, week=5).count() == n   # kept
+    db.close()
+
+
 # --- player detail ----------------------------------------------------------------
 
 def test_player_detail_merges_salary_pool_and_games():
@@ -224,6 +267,10 @@ def test_player_detail_merges_salary_pool_and_games():
     assert wk[(2, "backfill")]["salary"] == 7400 and wk[(2, "backfill")]["dk_points"] == 18.0
     assert wk[(2, "backfill")]["projection"] is not None
     assert [g["week"] for g in out["games"]] == [1, 2]
+    # league-wide projections cover weeks with no salary row (week 5 above)
+    fp_wk = {(f["season"], f["week"]): f["projection"] for f in out["fp_weeks"]}
+    assert {(2026, 1), (2026, 2), (2026, 5)} <= set(fp_wk)
+    assert 5 not in {w["week"] for w in out["weeks"]}
     db.close()
 
 

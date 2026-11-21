@@ -296,6 +296,28 @@ class SalaryHistory(Base):
     __table_args__ = (UniqueConstraint("draft_group_id", "player_dk_id"),)
 
 
+class FpProjection(Base):
+    """Every FantasyPros weekly projection pulled, slate or not. Written by
+    ingest and the projection backfill from the full-league payload, so
+    players outside the slate (TNF/SNF/MNF games) keep a projection for the
+    week. One row per (season, week, fpid); the latest pull replaces the week.
+    Joined to players on PlayerCanonical.fpid. Display and research only; the
+    pool and sims read PoolPlayer."""
+    __tablename__ = "fp_projections"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    season: Mapped[int] = mapped_column(Integer)
+    week: Mapped[int] = mapped_column(Integer)
+    fpid: Mapped[int] = mapped_column(Integer, index=True)
+    mflid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    team: Mapped[str] = mapped_column(String(8), default="")
+    position: Mapped[str] = mapped_column(String(8), default="")
+    projection: Mapped[float] = mapped_column(Float)
+    proj_stats: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("season", "week", "fpid"),)
+
+
 class PlayerGameLog(Base):
     """One regular-season game for one player, from nflverse. Written by the
     profile refresh for the current and prior season. Display only (player

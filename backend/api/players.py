@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from ..auth.security import current_user
 from ..jobs.poolutil import current_pool_version
 from ..models.db import get_db
-from ..models.models import (Contest, OwnershipObservation, PlayerCanonical,
-                             PlayerGameLog, PoolPlayer, PoolVersion,
+from ..models.models import (Contest, FpProjection, OwnershipObservation,
+                             PlayerCanonical, PlayerGameLog, PoolPlayer, PoolVersion,
                              ProfileSnapshot, SalaryHistory, Slate, User)
 from .profilecards import card, pct, reference
 
@@ -76,6 +76,14 @@ def player_detail(player_id: int, slate_id: int | None = None,
         if r.get("slate_id") in own_by_slate and own_by_slate[r["slate_id"]] is not None:
             r["actual_own"] = round(float(own_by_slate[r["slate_id"]]), 1)
 
+    # --- league-wide FP projections: covers weeks the player was off the slate --
+    fp_weeks = []
+    if c.fpid:
+        fp_weeks = [{"season": f.season, "week": f.week, "team": f.team,
+                     "projection": f.projection}
+                    for f in (db.query(FpProjection).filter_by(fpid=c.fpid)
+                              .order_by(FpProjection.season, FpProjection.week).all())]
+
     # --- game logs ------------------------------------------------------------
     games = []
     if c.gsis_id:
@@ -114,6 +122,7 @@ def player_detail(player_id: int, slate_id: int | None = None,
                    "team": c.team, "gsis_id": c.gsis_id, "player_dk_id": c.player_dk_id},
         "current": current,
         "weeks": week_rows,
+        "fp_weeks": fp_weeks,
         "games": games,
         "profile": profile,
         "pct_trend": trend,

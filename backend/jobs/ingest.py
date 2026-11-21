@@ -20,7 +20,7 @@ from ..settings import get_settings
 from ..sources import draftkings as dk
 from ..sources import fantasypros as fp
 from ..core.scoring import kicker_projection
-from .fpmatch import match_fp, projection_points
+from .fpmatch import match_fp, projection_points, record_fp_week
 from ..sources import odds as oddsrc
 from .runner import JobContext, register
 
@@ -138,20 +138,19 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
 
     # --- 3. FantasyPros projections -------------------------------------------
     ctx.update(0.35, "Ingesting FantasyPros projections")
+    season = payload.get("season") or slate.season
+    week = payload.get("week") or slate.week
     if fixture_dir:
         fp_raw = _load_fixture(fixture_dir, "fp_projections.json")
     else:
-        season = payload.get("season") or slate.season
-        week = payload.get("week") or slate.week
         if not season or not week:
             raise ValueError(
                 "A live ingest needs an explicit season and week. Pass them in "
                 "the ingest request; without a week FantasyPros returns "
                 "season-long totals.")
         fp_raw = fp.fetch(int(season), int(week), settings.fantasypros_api_key)
-    fp_players = fp.parse_projections(fp_raw)
-    if not showdown:
-        fp_players = [r for r in fp_players if r["position"] != "K"]
+    fp_all = fp.parse_projections(fp_raw)
+    fp_players = fp_all if showdown else [r for r in fp_all if r["position"] != "K"]
     fp_total = len(fp_players)
     fp_with_stats = sum(1 for r in fp_players if (r.get("stats") or {}))
     if fp_with_stats < 200:
@@ -160,6 +159,11 @@ def run_ingest(db: Session, ctx: JobContext, payload: dict) -> dict:
             f"(of {fp_total}). That is not enough to build a slate -- this "
             f"week's projections are probably not published yet. Refusing to "
             f"overwrite the pool with a near-empty projection set.")
+
+    # the whole league, not just slate teams: players in games off the slate
+    # (TNF/SNF/MNF) keep a projection for the week
+    if season and week:
+        record_fp_week(db, int(season), int(week), fp_all)
 
     candidates = [Candidate(str(r["canonical_id"]), r["name"], r["team"], r["position"])
                   for r in dk_players.values()]

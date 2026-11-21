@@ -12,7 +12,7 @@ interface WeekResult {
   n_games?: number; shape?: string; salaries?: number; probes?: number;
   estimated_id?: number; error?: string;
   projected?: number; no_projection_count?: number; no_projection?: string[];
-  projection_error?: string;
+  projection_error?: string; league_projected?: number;
   candidates?: Record<string, { n_games: number; shape: string; first_kick: string; last_kick: string }>;
 }
 
@@ -120,7 +120,8 @@ export default function SalaryBackfill({ season, currentWeek }: { season: number
       <div className="text-[11px] text-[var(--dim)] max-w-2xl">
         Filled weeks have salaries and projections, outlined weeks salaries only, dashed weeks neither.
         Leave Weeks blank to fill all the dashed weeks for {season}; projections come along. Fill
-        projections pulls FantasyPros for outlined weeks. The search
+        projections pulls FantasyPros for outlined weeks, or for the weeks you enter, and also stores every
+        player's projection that week, including games off the main slate. The search
         probes DraftKings draft group ids outward from an estimate between your known slates and takes
         the Sunday 1pm group with the most games. It stores salaries only and adds nothing to the slate
         list. A draft group ID skips the search and needs exactly one week.
@@ -149,7 +150,7 @@ export default function SalaryBackfill({ season, currentWeek }: { season: number
                       <td className="pr-4">{r.salaries ?? "—"}</td>
                       <td className="pr-4" title={r.no_projection?.length ? `No projection: ${r.no_projection.join(", ")}` : undefined}>
                         {r.projection_error ?? (r.projected !== undefined
-                          ? `${r.projected}${r.no_projection_count ? ` · ${r.no_projection_count} active unmatched` : ""}` : "—")}
+                          ? `${r.projected}${r.no_projection_count ? ` · ${r.no_projection_count} active unmatched` : ""}${r.league_projected ? ` · ${r.league_projected} league-wide` : ""}` : "—")}
                       </td>
                       <td className="pr-4 text-[var(--dim)]">{r.probes ?? "—"}</td>
                       <td className="pr-4 text-[var(--dim)]">

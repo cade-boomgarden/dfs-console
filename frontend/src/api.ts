@@ -54,6 +54,8 @@ export interface PlayerDetailDTO {
     ownership: number; team: string; opponent: string; status: string | null;
     implied_opp_total: number | null; value: number } | null;
   weeks: PlayerWeek[];
+  /** FantasyPros projection for every week pulled, slate or not */
+  fp_weeks: { season: number; week: number; team: string; projection: number }[];
   games: PlayerGame[];
   profile: PlayerProfile | null;
   pct_trend: Record<string, { week: number; value: number; pct: number | null }[]>;

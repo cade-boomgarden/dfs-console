@@ -27,7 +27,7 @@ from ..models.models import PlayerCanonical, SalaryHistory, Slate
 from ..settings import get_settings
 from ..sources import draftkings as dk
 from ..sources import fantasypros as fp
-from .fpmatch import match_fp, projection_points
+from .fpmatch import match_fp, projection_points, record_fp_week
 from .runner import JobContext, register
 
 MIN_FP_WITH_STATS = 200     # same floor as ingest: fewer means not published
@@ -115,6 +115,20 @@ def fill_projections(db: Session, draft_group_id: int, fp_raw: dict) -> dict[str
             "fp_unmatched": fp_unmatched,
             "no_projection": [m for _, m in missing[:15]],
             "no_projection_count": len(missing)}
+
+
+def record_league_week(db: Session, season: int, week: int, fp_raw: dict) -> dict[str, Any]:
+    """Store one week's full-league FantasyPros pull (`FpProjection`), so
+    players off the slate keep a projection. Refuses a thin payload, like
+    fill_projections."""
+    fp_players = fp.parse_projections(fp_raw)
+    with_stats = sum(1 for r in fp_players if r.get("stats"))
+    if with_stats < MIN_FP_WITH_STATS:
+        return {"error": f"FantasyPros returned only {with_stats} players with stats; "
+                         f"projections for that week are not available."}
+    n = record_fp_week(db, season, week, fp_players)
+    db.commit()
+    return {"league_projected": n}
 
 
 def _fetch_fp(season: int, week: int) -> dict:
@@ -211,13 +225,17 @@ def _projections_for(db: Session, draft_group_id: int, season: int, week: int,
     """fill_projections with failures reported, not raised: salaries are
     already stored and stay useful without projections."""
     try:
-        res = fill_projections(db, draft_group_id, fetch_fp(season, week))
+        fp_raw = fetch_fp(season, week)
+        league = record_league_week(db, season, week, fp_raw)
+        if "error" in league:
+            return {"projection_error": league["error"]}
+        res = fill_projections(db, draft_group_id, fp_raw)
     except Exception as e:                      # network, key, wrong-week guard
         db.rollback()
         return {"projection_error": str(e)[:300]}
     if "error" in res:
         return {"projection_error": res.pop("error")}
-    return res
+    return {**league, **res}
 
 
 @register("backfill_salaries")
@@ -257,30 +275,50 @@ def backfill_salaries_job(job_id: int) -> None:
 
 @register("backfill_projections")
 def backfill_projections_job(job_id: int) -> None:
-    """Payload: {season, weeks: [int]}. FantasyPros projections for weeks
-    whose salaries were backfilled (ingested weeks already have them)."""
-    ctx = JobContext(job_id)
+    """Payload: {season, weeks: [int]}. FantasyPros projections for the
+    requested weeks: the full league goes to FpProjection for every week
+    (ingested or not), and backfilled salary rows get theirs attached
+    (ingested weeks keep theirs on the pool version)."""
+    run_projection_backfill(JobContext(job_id), _fetch_fp)
+
+
+def run_projection_backfill(ctx: JobContext, fetch_fp, db: Session | None = None) -> list[dict]:
     p = ctx.payload()
     season = int(p["season"])
     weeks = [int(w) for w in p["weeks"]]
-    db = SessionLocal()
+    own_db = db is None
+    db = db or SessionLocal()
     results = []
     try:
         for i, w in enumerate(weeks):
             ctx.update(i / len(weeks), f"{season} wk{w}: FantasyPros projections")
+            row: dict[str, Any] = {"season": season, "week": w}
+            try:
+                fp_raw = fetch_fp(season, w)
+                row.update(record_league_week(db, season, w, fp_raw))
+            except Exception as e:              # network, key, wrong-week guard
+                db.rollback()
+                row["error"] = str(e)[:300]
+            if "error" in row:
+                row["projection_error"] = row.pop("error")
+                results.append(row)
+                continue
             gids = [g for (g,) in db.query(SalaryHistory.draft_group_id).filter_by(
                 season=season, week=w, source="backfill").distinct().all()]
-            if not gids:
-                results.append({"season": season, "week": w,
-                                "projection_error": "No backfilled salaries for this week."})
-                continue
             for g in gids:
-                results.append({"season": season, "week": w, "draft_group_id": g,
-                                **_projections_for(db, g, season, w, _fetch_fp)})
+                res = fill_projections(db, g, fp_raw)
+                if "error" in res:
+                    res = {"projection_error": res.pop("error")}
+                row.setdefault("groups", []).append({"draft_group_id": g, **res})
+            row["projected"] = sum(gr.get("projected", 0) for gr in row.get("groups", []))
+            results.append(row)
     finally:
-        db.close()
+        if own_db:
+            db.close()
     msg = "; ".join(
-        f"wk{r['week']}: {r['projected']} projected" if "projection_error" not in r
+        f"wk{r['week']}: {r['league_projected']} league, {r['projected']} on backfilled salaries"
+        if "projection_error" not in r
         else f"wk{r['week']}: {r['projection_error']}" for r in results)
     ctx.update(1.0, msg)
     ctx.finish({"weeks": results})
+    return results

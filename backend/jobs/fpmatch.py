@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..identity.resolver import AUTO_ACCEPT, Candidate, resolve_name
 from ..identity.rules import norm_team
-from ..models.models import PlayerCanonical, SourceMap
+from ..models.models import FpProjection, PlayerCanonical, SourceMap
 
 
 def projection_points(stats: dict | None) -> float:
@@ -55,3 +55,31 @@ def match_fp(db: Session, fp_players: list[dict], candidates: list[Candidate],
                        confidence=res.confidence, method=res.method)
             unresolved.append(rec)
     return stats_by_canon, unresolved, n_unmatched
+
+
+def record_fp_week(db: Session, season: int, week: int, fp_players: list[dict]) -> int:
+    """Store the full-league FantasyPros pull for one week, slate or not.
+
+    Replaces the week's rows, so the latest pull wins (same as the pool).
+    Records with no stats or no fpid are skipped. The caller has already
+    refused a thin payload; this does not commit. Returns rows written."""
+    def _int(x):
+        try:
+            return int(float(x)) if x not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    rows = {}
+    for rec in fp_players:
+        stats = rec.get("stats") or {}
+        fpid = _int(rec.get("fpid"))
+        if not stats or fpid is None:
+            continue
+        rows[fpid] = FpProjection(
+            season=season, week=week, fpid=fpid, mflid=_int(rec.get("mflid")),
+            name=rec.get("name", ""), team=norm_team(rec.get("team", "")),
+            position=rec.get("position", ""),
+            projection=round(projection_points(stats), 2), proj_stats=stats)
+    db.query(FpProjection).filter_by(season=season, week=week).delete()
+    db.add_all(rows.values())
+    return len(rows)

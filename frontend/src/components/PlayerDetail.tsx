@@ -77,13 +77,16 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
   const byWeek = new Map<number, PlayerWeek>();
   sw.forEach((w) => { const cur = byWeek.get(w.week!); if (!cur || (cur.source !== "ingest" && w.source === "ingest")) byWeek.set(w.week!, w); });
   const gByWeek = new Map(sg.map((g) => [g.week, g]));
+  // slate projection first; the league-wide pull covers weeks off the slate
+  const fpByWeek = new Map((d.fp_weeks ?? []).filter((f) => f.season === season).map((f) => [f.week, f.projection]));
+  const projAt = (w: number) => byWeek.get(w)?.projection ?? fpByWeek.get(w);
 
   const salary: WeekSeries = { key: "sal", label: "Salary", kind: "line",
     values: new Map(weeks.map((w) => [w, byWeek.get(w)?.salary])) };
   const pts: WeekSeries = { key: "pts", label: "DK points", kind: "bar",
     values: new Map(weeks.map((w) => [w, gByWeek.get(w)?.dk_points ?? byWeek.get(w)?.dk_points])) };
   const proj: WeekSeries = { key: "proj", label: "Projection", kind: "tick",
-    values: new Map(weeks.map((w) => [w, byWeek.get(w)?.projection])) };
+    values: new Map(weeks.map((w) => [w, projAt(w)])) };
 
   const pointsList = sg.map((g) => g.dk_points);
   const last3 = mean([...sg].sort((a, b) => b.week - a.week).slice(0, 3).map((g) => g.dk_points));
@@ -94,7 +97,7 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
       .filter((p): p is readonly [number, number] => !!p[0] && p[1] !== undefined);
     return pairs.length ? (pairs.reduce((a, [, p]) => a + p, 0) / pairs.reduce((a, [s]) => a + s, 0)) * 1000 : null;
   })();
-  const beat = weeks.map((w) => [byWeek.get(w)?.projection, gByWeek.get(w)?.dk_points] as const)
+  const beat = weeks.map((w) => [projAt(w), gByWeek.get(w)?.dk_points] as const)
     .filter((p): p is readonly [number, number] => p[0] != null && p[1] !== undefined && p[0] > 0);
 
   const prof = d.profile && d.profile.season === season ? d.profile : null;
@@ -220,13 +223,14 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
               <tbody>
                 {[...weeks].reverse().filter((w) => byWeek.has(w) || gByWeek.has(w)).map((w) => {
                   const r = byWeek.get(w), g = gByWeek.get(w);
-                  const over = r?.projection != null && g ? g.dk_points - r.projection : null;
+                  const pj = projAt(w);
+                  const over = pj != null && g ? g.dk_points - pj : null;
                   return (
                     <tr key={w} className="border-b hairline">
                       <td className="px-2 py-1">{w}</td>
                       <td className="px-2 py-1 text-[var(--dim)]">{g?.opponent ?? r?.opponent ?? "—"}</td>
                       <td className="px-2 py-1">{r ? money(r.salary) : "—"}</td>
-                      <td className="px-2 py-1 text-[var(--dim)]">{num(r?.projection)}</td>
+                      <td className="px-2 py-1 text-[var(--dim)]">{num(pj)}</td>
                       <td className="px-2 py-1">
                         {g ? num(g.dk_points) : "—"}
                         {over !== null && <span className="ml-1 text-[var(--mute)]">{over >= 0 ? "+" : "−"}{Math.abs(over).toFixed(1)}</span>}
