@@ -40,8 +40,22 @@ export interface PlayerProfile {
 export interface PlayerWeek {
   draft_group_id: number; season: number | null; week: number | null; slate_date: string | null;
   salary: number; team: string; opponent: string; status: string | null; source: string;
-  projection: number | null; ownership: number | null; actual_own: number | null;
+  projection: number | null; ownership: number | null;
+  /** realised ownership, large-field MME contests only (mean when several) */
+  actual_own: number | null;
+  /** share of those contests' captured top lineups with the player, % */
+  top_rate?: number | null;
+  /** "observed", or "not_captured": the slate has a large-field MME
+   *  contest but the player is in none of its captured lineups */
+  own_status?: "observed" | "not_captured";
+  lf_contests?: number;
+  contests?: PlayerContestOwn[];
   dk_points: number | null; slate_id?: number;
+}
+export interface PlayerContestOwn {
+  contest_id: number; contest_key: string; name: string; slate_type: string | null;
+  total_entries: number | null; max_entries_per_user: number | null; lf_mme: boolean;
+  drafted_pct: number | null; observed: boolean; top_n: number | null; top_rate: number | null;
 }
 export interface PlayerGame {
   season: number; week: number; team: string; opponent: string; dk_points: number;

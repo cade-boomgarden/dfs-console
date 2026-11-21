@@ -11,6 +11,7 @@ from ..models.db import get_db
 from ..models.models import (Contest, FpProjection, OwnershipObservation,
                              PlayerCanonical, PlayerGameLog, PoolPlayer, PoolVersion,
                              ProfileSnapshot, SalaryHistory, Slate, User)
+from ..jobs.results import classify
 from .profilecards import card, pct, reference
 
 router = APIRouter(prefix="/api/players", tags=["players"])
@@ -22,6 +23,60 @@ def _pool_row(p: PoolPlayer) -> dict:
             "opponent": p.opponent, "status": p.status,
             "implied_opp_total": p.implied_opp_total,
             "value": round(p.projection / max(p.salary, 1) * 1000, 2)}
+
+
+def _attach_ownership(db: Session, player_id: int, weeks: dict[int, dict]) -> None:
+    """Realised ownership by draft group. `actual_own` is the large-field MME
+    figure (mean over that slate's qualifying Classic contests); `contests`
+    lists every contest on the slate so the small and single-entry fields
+    stay visible but separate. A player on a slate with a qualifying
+    contest but in none of its captured lineups gets `own_status`
+    "not_captured": unknown, not zero, unless the file was the full field."""
+    dgs = [g for g in weeks]
+    if not dgs:
+        return
+    contests = (db.query(Contest).filter(Contest.draft_group_id.in_(dgs)).all())
+    if not contests:
+        return
+    obs = {}
+    for o in (db.query(OwnershipObservation)
+              .filter(OwnershipObservation.player_id == player_id,
+                      OwnershipObservation.contest_id.in_([c.id for c in contests])).all()):
+        # Showdown has a CPT and a FLEX row with the same combined number
+        obs.setdefault(o.contest_id, []).append(o)
+    for c in contests:
+        row = weeks.get(c.draft_group_id)
+        if row is None:
+            continue
+        cls = classify(c)
+        cap = c.capture or {}
+        os_ = obs.get(c.id, [])
+        pct = os_[0].drafted_pct if os_ else None
+        top_n = cap.get("top_n") or 0
+        cnt = sum(o.lineup_count or 0 for o in os_) if os_ else 0
+        if pct is None and cap.get("full_field"):
+            pct = 0.0
+        row.setdefault("contests", []).append({
+            "contest_id": c.id, "contest_key": c.contest_key, "name": c.name,
+            "slate_type": c.slate_type, "total_entries": cls["total_entries"],
+            "max_entries_per_user": c.max_entries_per_user, "lf_mme": cls["lf_mme"],
+            "drafted_pct": pct, "observed": bool(os_),
+            "top_n": top_n or None,
+            "top_rate": round(100 * cnt / top_n, 1) if top_n and os_ else (0.0 if top_n else None),
+        })
+    for row in weeks.values():
+        lf = [x for x in row.get("contests", []) if x["lf_mme"]]
+        if not lf:
+            continue
+        seen = [x for x in lf if x["drafted_pct"] is not None]
+        if seen:
+            row["actual_own"] = round(sum(x["drafted_pct"] for x in seen) / len(seen), 1)
+            rates = [x["top_rate"] for x in seen if x["top_rate"] is not None]
+            row["top_rate"] = round(sum(rates) / len(rates), 1) if rates else None
+            row["own_status"] = "observed"
+        else:
+            row["own_status"] = "not_captured"
+        row["lf_contests"] = len(lf)
 
 
 @router.get("/{player_id}")
@@ -67,14 +122,7 @@ def player_detail(player_id: int, slate_id: int | None = None,
             "source": "ingest", "actual_own": None})
         row.update(projection=pp.projection, ownership=pp.ownership, slate_id=sl.id)
 
-    own = (db.query(Contest.slate_id, func.avg(OwnershipObservation.drafted_pct))
-           .join(Contest, Contest.id == OwnershipObservation.contest_id)
-           .filter(OwnershipObservation.player_id == player_id)
-           .group_by(Contest.slate_id).all())
-    own_by_slate = {sid: v for sid, v in own}
-    for r in weeks.values():
-        if r.get("slate_id") in own_by_slate and own_by_slate[r["slate_id"]] is not None:
-            r["actual_own"] = round(float(own_by_slate[r["slate_id"]]), 1)
+    _attach_ownership(db, player_id, weeks)
 
     # --- league-wide FP projections: covers weeks the player was off the slate --
     fp_weeks = []

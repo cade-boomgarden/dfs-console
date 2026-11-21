@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
@@ -100,6 +100,9 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
   const beat = weeks.map((w) => [projAt(w), gByWeek.get(w)?.dk_points] as const)
     .filter((p): p is readonly [number, number] => p[0] != null && p[1] !== undefined && p[0] > 0);
 
+  const ownRows = weeks.map((w) => byWeek.get(w)).filter((r): r is PlayerWeek => !!r?.contests?.length);
+  const ownWeeks = ownRows.filter((r) => r.actual_own != null);
+
   const prof = d.profile && d.profile.season === season ? d.profile : null;
   const rows = (ROWS[pos] ?? []);
   const trendAt = (k: string, gameWeek: number) =>
@@ -145,6 +148,10 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
         <Tile label={`${season ?? ""} DK pts/g`} value={num(mean(pointsList))}
           sub={last3 !== null ? `last 3: ${num(last3)}` : undefined} />
         <Tile label="Pts per $1k" value={num(ptsPerK, 2)} sub="weeks with salary" />
+        {ownWeeks.length > 0 && (
+          <Tile label="LF MME own%" value={num(mean(ownWeeks.map((w) => w.actual_own!)))}
+            sub={`${ownWeeks.length} ${ownWeeks.length === 1 ? "week" : "weeks"} observed`} />
+        )}
         {beat.length > 0 && (
           <Tile label="Beat projection" value={`${beat.filter(([p, a]) => a > p).length}/${beat.length}`}
             sub={`avg ${num(mean(beat.map(([p, a]) => a - p)))} vs proj`} />
@@ -158,7 +165,7 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
               <div className="text-[var(--dim)]">{r.team} v {r.opponent}{r.source === "backfill" ? " · backfilled" : ""}</div>) : null; }} />
           <WeekChart title="DK points" legend weeks={weeks} series={[pts, proj]} format={(v) => v.toFixed(1)} height={110}
             extra={(w) => { const r = byWeek.get(w); return r?.actual_own != null ? (
-              <div className="flex justify-between gap-4"><span className="text-[var(--dim)]">Field own%</span><span>{num(r.actual_own)}</span></div>) : null; }} />
+              <div className="flex justify-between gap-4"><span className="text-[var(--dim)]">Large-field MME own%</span><span>{num(r.actual_own)}</span></div>) : null; }} />
           {missing.length > 0 && (
             <div className="text-[10px] text-[var(--mute)]">
               No salary for week {missing.join(", ")}. Fill it from Slates → Salary history.
@@ -168,6 +175,8 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
       ) : (
         <div className="text-[11px] text-[var(--dim)]">No salary history or games for this player yet.</div>
       )}
+
+      {ownRows.length > 0 && <OwnershipHistory rows={ownRows} points={(w) => gByWeek.get(w)?.dk_points ?? byWeek.get(w)?.dk_points ?? null} />}
 
       {pos !== "DST" && rows.length > 0 && sg.length > 0 && (
         <section>
@@ -250,6 +259,76 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
         </section>
       )}
     </div>
+  );
+}
+
+/** Realised ownership by week. The headline number is large-field MME
+ *  only; the other contests on the slate stay one click away because small
+ *  and single-entry fields run much chalkier (field-data-2026.md). */
+function OwnershipHistory({ rows, points }: { rows: PlayerWeek[]; points: (w: number) => number | null }) {
+  const [open, setOpen] = useState<number | null>(null);
+  const th = "px-2 py-1.5 text-left text-[9px] uppercase tracking-wider text-[var(--dim)] font-normal whitespace-nowrap";
+  return (
+    <section>
+      <div className="flex items-baseline gap-2 mb-2">
+        <h2 className="eyebrow">Ownership history</h2>
+        <span className="text-[10px] text-[var(--mute)]">
+          Field own% is large-field MME Classic contests only. Top-lineup rate is the share of the
+          captured top lineups that rostered him. Click a week for every contest on that slate.
+        </span>
+      </div>
+      <div className="panel overflow-auto">
+        <table className="w-full text-[11px] num">
+          <thead>
+            <tr className="border-b hairline">
+              {["Wk", "Opp", "Salary", "Proj own", "Field own (LF MME)", "Top-lineup rate", "DK pts", "Contests"].map((h) => (
+                <th key={h} className={th}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {[...rows].reverse().map((r) => {
+              const lf = (r.contests ?? []).filter((c) => c.lf_mme);
+              const isOpen = open === r.draft_group_id;
+              return (
+                <Fragment key={r.draft_group_id}>
+                  <tr className="border-b hairline cursor-pointer hover:bg-[var(--raised)]"
+                    onClick={() => setOpen(isOpen ? null : r.draft_group_id)}>
+                    <td className="px-2 py-1">{r.week}</td>
+                    <td className="px-2 py-1 text-[var(--dim)]">{r.opponent}</td>
+                    <td className="px-2 py-1">{money(r.salary)}</td>
+                    <td className="px-2 py-1 text-[var(--dim)]">{num(r.ownership)}</td>
+                    <td className="px-2 py-1">
+                      {r.actual_own != null ? num(r.actual_own)
+                        : r.own_status === "not_captured"
+                          ? <span className="text-[var(--mute)]" title="On the slate, but in none of the captured lineups. Unknown, likely low.">not captured</span>
+                          : <span className="text-[var(--mute)]" title="No large-field MME contest loaded for this slate">—</span>}
+                    </td>
+                    <td className="px-2 py-1">{r.top_rate != null ? `${num(r.top_rate)}%` : "—"}</td>
+                    <td className="px-2 py-1">{num(points(r.week ?? 0))}</td>
+                    <td className="px-2 py-1 text-[var(--dim)]">{lf.length} LF MME · {(r.contests ?? []).length} total {isOpen ? "▾" : "▸"}</td>
+                  </tr>
+                  {isOpen && (r.contests ?? []).map((c) => (
+                    <tr key={`${r.draft_group_id}-${c.contest_id}`} className="border-b hairline bg-[var(--raised)]/40 text-[10px]">
+                      <td />
+                      <td className="px-2 py-1 text-[var(--dim)]" colSpan={3}>
+                        {c.lf_mme && <span className="mr-1 px-1 rounded border hairline text-[var(--up)]">LF MME</span>}
+                        {c.name}
+                      </td>
+                      <td className="px-2 py-1">{c.drafted_pct != null ? num(c.drafted_pct) : <span className="text-[var(--mute)]">not captured</span>}</td>
+                      <td className="px-2 py-1">{c.top_rate != null ? `${num(c.top_rate)}% of ${c.top_n}` : "—"}</td>
+                      <td className="px-2 py-1 text-[var(--dim)]" colSpan={2}>
+                        {c.total_entries?.toLocaleString() ?? "?"} entries · max {c.max_entries_per_user ?? "?"}/user
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

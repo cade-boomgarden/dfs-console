@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api, ProfileStatus, SlateSummary, watchJob } from "../api";
 import { Badge, Btn, Field, Progress } from "../ui";
 import SalaryBackfill from "../components/SalaryBackfill";
+import ContestResults from "../components/ContestResults";
 
 /** Best guess at the current NFL season and week.
  *  Week 1 kicks off the Thursday after Labor Day (first Monday in September).
@@ -138,6 +139,8 @@ export default function Slates() {
       </section>
 
       <SalaryBackfill season={season} currentWeek={week} />
+
+      <ContestResults />
 
       <div className="panel divide-y divide-[var(--line)]">
         {slates.data?.map((s) => (
