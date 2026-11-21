@@ -412,16 +412,21 @@ export default function Builder() {
             {picked.length > 0 && Object.keys(ev.marginal).length > 0 && (
               <div>
                 <div className="eyebrow mb-1">Per-player mean</div>
-                {Object.entries(ev.marginal).map(([pid, m]) => (
-                  <div key={pid} className="flex justify-between text-[11px] num">
-                    <span className="text-[var(--dim)] truncate">
-                      {pid.startsWith("c")
-                        ? `${byId.get(Number(pid.slice(1)))?.name ?? pid} (CPT)`
-                        : byId.get(Number(pid))?.name ?? pid}
-                    </span>
-                    <span>{num(m)}</span>
-                  </div>
-                ))}
+                {/* slot order, matching the rail and the copy. Iterating
+                    ev.marginal directly sorts by player id: JS orders
+                    integer-like object keys ascending. */}
+                {slots.map((id, i) => {
+                  if (id === null) return null;
+                  const m = ev.marginal[isCpt(i) ? `c${id}` : String(id)];
+                  if (m === undefined) return null;
+                  return (
+                    <div key={i} className="flex justify-between gap-2 text-[11px] num">
+                      <span className="text-[var(--mute)] w-9 shrink-0">{SLOTS[i]}</span>
+                      <span className="text-[var(--dim)] truncate flex-1">{byId.get(id)?.name ?? id}</span>
+                      <span>{num(m)}</span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
