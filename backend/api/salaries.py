@@ -10,6 +10,7 @@ from ..auth.security import current_user
 from ..jobs.runner import enqueue
 from ..models.db import get_db
 from ..models.models import SalaryHistory, User
+from ..jobs.poolutil import showdown_groups
 
 router = APIRouter(prefix="/api/salaries", tags=["salaries"])
 
@@ -25,11 +26,13 @@ def coverage(db: Session = Depends(get_db), user: User = Depends(current_user)):
                       SalaryHistory.draft_group_id, SalaryHistory.slate_date,
                       SalaryHistory.source)
             .all())
-    # ingested weeks keep projections on the pool version, not here
+    # ingested weeks keep projections on the pool version, not here;
+    # Showdown groups never belong (rows from before the ingest guard)
+    sd = showdown_groups(db)
     out = [{"season": s, "week": w, "draft_group_id": g, "slate_date": d,
             "source": src, "players": n,
             "projected": n if src == "ingest" else np_}
-           for s, w, g, d, src, n, np_ in rows]
+           for s, w, g, d, src, n, np_ in rows if g not in sd]
     out.sort(key=lambda r: (r["slate_date"] or "", r["draft_group_id"]), reverse=True)
     return out
 

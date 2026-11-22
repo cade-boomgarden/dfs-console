@@ -41,7 +41,12 @@ def record_salaries(db: Session, draft_group_id: int, season: int | None,
     Players DK lists that have no canonical row yet get one (keyed on
     playerDkId, like ingest). An existing canonical row is never renamed or
     re-teamed from here: a backfilled week can be older than what it holds.
-    Returns the number of rows written."""
+    Returns the number of rows written.
+
+    Showdown draft groups write nothing: their prices are a different scale
+    and would read as Classic salary history."""
+    if parsed.get("slate_type") == "showdown":
+        return 0
     games = {g["competition_id"]: g for g in parsed["games"]}
     starts = sorted(g["start_time"] for g in parsed["games"] if g.get("start_time"))
     slate_date = starts[0][:10] if starts else None

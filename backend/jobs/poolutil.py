@@ -79,6 +79,13 @@ def is_showdown_slate(db: Session, slate_id: int) -> bool:
     return bool(s and s.slate_type == "showdown")
 
 
+def showdown_groups(db: Session) -> set[int]:
+    """Draft group ids of every Showdown slate."""
+    from ..models.models import Slate
+    return {g for (g,) in db.query(Slate.draft_group_id)
+            .filter(Slate.slate_type == "showdown").all()}
+
+
 def locked_and_excluded(adjustments: dict[int, dict]) -> tuple[frozenset[str], frozenset[str]]:
     locked = frozenset(str(pid) for pid, a in adjustments.items() if a.get("lock"))
     excluded = frozenset(str(pid) for pid, a in adjustments.items() if a.get("exclude"))
