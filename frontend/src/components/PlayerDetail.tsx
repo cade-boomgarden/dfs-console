@@ -105,7 +105,9 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
   const trendAt = (k: string, gameWeek: number) =>
     (d.pct_trend[k] ?? []).find((t) => t.week === gameWeek + 1);   // as-of wk N = games thru N-1
   const cols = LOG_COLS[pos] ?? [];
-  const missing = weeks.filter((w) => !byWeek.has(w) && gByWeek.has(w));
+  const showdown = d.slate_type === "showdown";
+  // Showdown has no backfill: only ingested Showdown slates carry a salary
+  const missing = showdown ? [] : weeks.filter((w) => !byWeek.has(w) && gByWeek.has(w));
 
   return (
     <div className="space-y-5">
@@ -153,7 +155,7 @@ export function PlayerDetail({ playerId, slateId }: { playerId: number; slateId?
 
       {weeks.length > 0 ? (
         <section className="panel p-3 space-y-4">
-          <WeekChart title="Salary" weeks={weeks} series={[salary]} format={sk} yZero={false} height={84}
+          <WeekChart title={showdown ? "Showdown FLEX salary" : "Salary"} weeks={weeks} series={[salary]} format={sk} yZero={false} height={84}
             extra={(w) => { const r = byWeek.get(w); return r ? (
               <div className="text-[var(--dim)]">{r.team} v {r.opponent}{r.source === "backfill" ? " · backfilled" : ""}</div>) : null; }} />
           <WeekChart title="DK points" legend weeks={weeks} series={[pts, proj]} format={(v) => v.toFixed(1)} height={110}

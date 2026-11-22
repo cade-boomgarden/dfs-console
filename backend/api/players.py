@@ -6,7 +6,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth.security import current_user
-from ..jobs.poolutil import current_pool_version
+from ..jobs.poolutil import current_pool_version, showdown_groups
 from ..models.db import get_db
 from ..models.models import (Contest, FpProjection, OwnershipObservation,
                              PlayerCanonical, PlayerGameLog, PoolPlayer, PoolVersion,
@@ -26,10 +26,19 @@ def _pool_row(p: PoolPlayer) -> dict:
 
 @router.get("/{player_id}")
 def player_detail(player_id: int, slate_id: int | None = None,
+                  slate_type: str | None = None,
                   db: Session = Depends(get_db), user: User = Depends(current_user)):
     c = db.get(PlayerCanonical, player_id)
     if c is None:
         raise HTTPException(404, "No such player")
+
+    # Classic and Showdown prices are different scales, so the weekly rows
+    # come from one slate type only: the one asked for, else the slate's
+    if slate_type not in ("classic", "showdown"):
+        sl = db.get(Slate, slate_id) if slate_id is not None else None
+        slate_type = (sl.slate_type if sl else None) or "classic"
+    showdown = slate_type == "showdown"
+    sd_groups = showdown_groups(db)
 
     # --- this slate ----------------------------------------------------------
     current = None
@@ -43,6 +52,10 @@ def player_detail(player_id: int, slate_id: int | None = None,
     # --- weekly rows: salary history + that week's pool + realised own -------
     weeks: dict[int, dict] = {}         # draft_group_id -> row
     for s in (db.query(SalaryHistory).filter_by(player_id=player_id).all()):
+        # ingest and backfill keep Showdown out; this guards rows written
+        # before they did
+        if (s.draft_group_id in sd_groups) != showdown:
+            continue
         weeks[s.draft_group_id] = {
             "draft_group_id": s.draft_group_id, "season": s.season, "week": s.week,
             "slate_date": s.slate_date, "salary": s.salary, "team": s.team,
@@ -59,6 +72,8 @@ def player_detail(player_id: int, slate_id: int | None = None,
                      .group_by(PoolVersion.slate_id).all())
     for pp, sl in pool_rows:
         if latest_pv.get(sl.id) != pp.pool_version_id:
+            continue
+        if ((sl.slate_type or "classic") == "showdown") != showdown:
             continue
         row = weeks.setdefault(sl.draft_group_id, {
             "draft_group_id": sl.draft_group_id, "season": sl.season, "week": sl.week,
@@ -120,6 +135,7 @@ def player_detail(player_id: int, slate_id: int | None = None,
     return {
         "player": {"player_id": c.id, "name": c.name, "position": c.position,
                    "team": c.team, "gsis_id": c.gsis_id, "player_dk_id": c.player_dk_id},
+        "slate_type": slate_type,
         "current": current,
         "weeks": week_rows,
         "fp_weeks": fp_weeks,

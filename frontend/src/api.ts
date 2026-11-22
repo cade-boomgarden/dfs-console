@@ -50,6 +50,8 @@ export interface PlayerGame {
 export interface PlayerDetailDTO {
   player: { player_id: number; name: string; position: string; team: string;
     gsis_id: string | null; player_dk_id: number | null };
+  /** which slate type the weekly rows come from; the two never mix */
+  slate_type: "classic" | "showdown";
   current: { salary: number; projection: number; floor: number; ceiling: number;
     ownership: number; team: string; opponent: string; status: string | null;
     implied_opp_total: number | null; value: number } | null;

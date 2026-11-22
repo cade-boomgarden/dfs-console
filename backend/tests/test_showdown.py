@@ -292,3 +292,49 @@ def test_builder_endpoints_showdown():
     assert hand["lineup_set_id"] == saved["lineup_set_id"]
     assert hand["lineups"][-1] == full
     db.close()
+
+
+def test_salary_history_keeps_showdown_and_classic_apart():
+    """Showdown FLEX prices never show as Classic salary history, and a
+    Showdown view never mixes in Classic weeks."""
+    from backend.api.players import player_detail
+    from backend.api.salaries import coverage
+    from backend.jobs.salaries import record_salaries
+    from backend.models.models import SalaryHistory
+
+    db = SessionLocal()
+    sd_slate = db.query(Slate).filter_by(slate_type="showdown").first()
+    raw = json.loads((SD_FIX / "dkdraftables_fixture_small.json").read_text())
+    assert record_salaries(db, 156434, 2026, 11, dk.parse_draftables(raw)) == 0
+    assert db.query(SalaryHistory).filter_by(draft_group_id=156434).count() == 0
+
+    from backend.jobs.poolutil import current_pool_version
+    pv = current_pool_version(db, sd_slate.id)
+    p = next(r for r in db.query(PoolPlayer).filter_by(pool_version_id=pv.id)
+             if r.position == "QB" and r.team == "BAL")
+    # a Classic week for the same player, plus a Showdown row written
+    # before the ingest guard existed
+    db.add_all([
+        SalaryHistory(player_id=p.player_id, player_dk_id=1, draft_group_id=900001,
+                      season=2026, week=10, slate_date="2026-11-08", salary=7100,
+                      position="QB", team="BAL", source="backfill"),
+        SalaryHistory(player_id=p.player_id, player_dk_id=1, draft_group_id=156434,
+                      season=2026, week=11, slate_date="2026-11-16", salary=p.salary,
+                      position="QB", team="BAL", source="ingest")])
+    db.commit()
+
+    classic = player_detail(p.player_id, slate_type="classic", db=db, user=None)
+    assert classic["slate_type"] == "classic"
+    # other modules may have ingested Classic slates into the shared DB
+    groups = {w["draft_group_id"] for w in classic["weeks"]}
+    assert 900001 in groups and 156434 not in groups
+
+    sdv = player_detail(p.player_id, slate_id=sd_slate.id, db=db, user=None)
+    assert sdv["slate_type"] == "showdown"
+    assert {w["draft_group_id"] for w in sdv["weeks"]} == {156434}
+    assert sdv["current"]["salary"] == p.salary
+
+    assert 156434 not in {r["draft_group_id"] for r in coverage(db=db, user=None)}
+    db.query(SalaryHistory).filter(SalaryHistory.draft_group_id.in_([900001, 156434])).delete()
+    db.commit()
+    db.close()
