@@ -89,6 +89,38 @@ def set_adjustment(slate_id: int, body: AdjustmentIn,
     return {"id": a.id}
 
 
+class BulkAdjustmentIn(BaseModel):
+    player_ids: list[int]
+    kind: str
+    on: bool = True
+    value: float | None = None
+    note: str = ""
+
+
+@router.post("/adjustments/bulk")
+def set_adjustments_bulk(slate_id: int, body: BulkAdjustmentIn,
+                         db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Set or clear one adjustment kind on many players in one transaction.
+    Mass fades from the Pool filters and shift-click ranges land here; the
+    note records the filter that produced them."""
+    if body.kind not in ADJ_KINDS:
+        raise HTTPException(400, f"Unknown adjustment kind {body.kind!r}")
+    ids = sorted(set(body.player_ids))
+    if not ids:
+        return {"changed": 0}
+    db.query(Adjustment).filter(
+        Adjustment.slate_id == slate_id, Adjustment.user_id == user.id,
+        Adjustment.player_id.in_(ids), Adjustment.kind == body.kind,
+        Adjustment.active.is_(True),
+    ).update({"active": False}, synchronize_session=False)
+    if body.on:
+        db.add_all([Adjustment(user_id=user.id, slate_id=slate_id, player_id=pid,
+                               kind=body.kind, value=body.value, note=body.note)
+                    for pid in ids])
+    db.commit()
+    return {"changed": len(ids)}
+
+
 @router.delete("/adjustments/{player_id}/{kind}")
 def clear_adjustment(slate_id: int, player_id: int, kind: str,
                      db: Session = Depends(get_db), user: User = Depends(current_user)):

@@ -432,3 +432,38 @@ def test_builder_set_tracks_saves():
     assert after["n_drafts"] == before["n_drafts"] + 1
     assert after["lineups"][-1] == ids
     db.close()
+
+
+def test_bulk_adjustments_set_and_clear():
+    """POST /pool/adjustments/bulk excludes many players at once, keeps one
+    active row per player and kind, and clears them again."""
+    from backend.api.pool import (BulkAdjustmentIn, get_pool,
+                                  set_adjustments_bulk)
+    from backend.models.models import Adjustment, Slate, User
+
+    db = SessionLocal()
+    user = db.query(User).first()
+    slate = db.query(Slate).order_by(Slate.id.desc()).first()
+    players = get_pool(slate.id, db=db, user=user)["players"]
+    fades = [p["player_id"] for p in players if p["value"] < 2.0][:12]
+    assert len(fades) >= 5
+
+    r = set_adjustments_bulk(slate.id, BulkAdjustmentIn(
+        player_ids=fades + fades[:2], kind="exclude", note="bulk: Val < 2"),
+        db=db, user=user)
+    assert r["changed"] == len(fades)
+    # applying the same fade twice leaves one active row per player
+    set_adjustments_bulk(slate.id, BulkAdjustmentIn(player_ids=fades, kind="exclude"),
+                         db=db, user=user)
+    active = (db.query(Adjustment)
+              .filter_by(slate_id=slate.id, user_id=user.id, kind="exclude", active=True)
+              .filter(Adjustment.player_id.in_(fades)).count())
+    assert active == len(fades)
+    pool = {p["player_id"]: p for p in get_pool(slate.id, db=db, user=user)["players"]}
+    assert all(pool[pid]["adjustments"].get("exclude") for pid in fades)
+
+    set_adjustments_bulk(slate.id, BulkAdjustmentIn(player_ids=fades, kind="exclude", on=False),
+                         db=db, user=user)
+    pool = {p["player_id"]: p for p in get_pool(slate.id, db=db, user=user)["players"]}
+    assert not any(pool[pid]["adjustments"].get("exclude") for pid in fades)
+    db.close()
