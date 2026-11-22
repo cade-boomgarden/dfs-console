@@ -52,10 +52,14 @@ export default function Builder() {
   const [ev, setEv] = useState<Evaluation | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
-  // Fades: players the optimizer must skip when completing. Builder-session
-  // only; they survive Clear so you can hand-build several lineups against
-  // the same fade list. Pool-page excludes still apply on top.
+  // Fades: players the optimizer must skip when completing. Two sources:
+  // Pool-page excludes (saved on the slate, shown here as fades) and
+  // Builder-session fades (survive Clear so you can hand-build several
+  // lineups against the same list, gone when you leave the page).
   const [fades, setFades] = useState<Set<number>>(new Set());
+  const poolFades = useMemo(() => new Set((pool.data?.players ?? [])
+    .filter((p) => p.adjustments.exclude).map((p) => p.player_id)), [pool.data]);
+  const allFades = useMemo(() => new Set([...poolFades, ...fades]), [poolFades, fades]);
   const [objective, setObjective] = useState<Objective>("mean");
   const [detail, setDetail] = useState<number | null>(null);
   const timer = useRef<number>();
@@ -161,15 +165,24 @@ export default function Builder() {
     const empty = next.findIndex((s) => s === null);
     if (empty >= 0) setActive(empty);
     setQ("");
-    // picking a player by hand overrides a fade on them
+    // picking a player by hand overrides a session fade on them; a slotted
+    // player is locked, so a Pool exclude does not block the pick either
     if (fades.has(id)) toggleFade(id);
   };
 
-  const toggleFade = (id: number) => setFades((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
+  const toggleFade = async (id: number) => {
+    // unfading a Pool exclude removes it from the slate, so Pool agrees
+    if (poolFades.has(id)) {
+      await api.del(`/api/slates/${slateId}/pool/adjustments/${id}/exclude`);
+      qc.invalidateQueries({ queryKey: ["pool", slateId] });
+      return;
+    }
+    setFades((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   // fade a slotted player: open the slot and keep the optimizer off them
   const fadeSlot = (i: number) => {
@@ -184,7 +197,7 @@ export default function Builder() {
     setError("");
     const r = await api.post<{ lineups: { slot: string; player_id: number }[][]; error?: string }>(
       `/api/slates/${slateId}/builder/complete`,
-      { player_ids: slots, n: 1, fade_ids: [...fades], objective });
+      { player_ids: slots, n: 1, fade_ids: [...allFades], objective });
     setBusy("");
     if (r.lineups.length) setSlots(r.lineups[0].map((s) => s.player_id));
     else setError(r.error ?? "No completion found.");
@@ -303,23 +316,29 @@ export default function Builder() {
         </div>
         <div className="pt-2">
           <div className="flex items-center justify-between mb-1">
-            <span className="eyebrow">Fades ({fades.size})</span>
+            <span className="eyebrow">Fades ({allFades.size})</span>
             {fades.size > 0 && (
               <button className="text-[11px] text-[var(--dim)] hover:text-[var(--ink)]"
-                onClick={() => setFades(new Set())}>Clear fades</button>
+                title="Clears Builder fades. Pool excludes stay."
+                onClick={() => setFades(new Set())}>Clear Builder fades</button>
             )}
           </div>
-          {fades.size === 0
-            ? <div className="text-[11px] text-[var(--dim)]">Fade players from the table or a slot. The optimizer skips them.</div>
+          {allFades.size === 0
+            ? <div className="text-[11px] text-[var(--dim)]">Fade players from the table or a slot, or exclude them in Pool. The optimizer skips them.</div>
             : (
               <div className="flex flex-wrap gap-1">
-                {[...fades].map((id) => (
-                  <button key={id} onClick={() => toggleFade(id)} title="Unfade"
+                {[...allFades].map((id) => {
+                  const fromPool = poolFades.has(id);
+                  return (
+                  <button key={id} onClick={() => toggleFade(id)}
+                    title={fromPool ? "Excluded in Pool. Click to remove the Pool exclude." : "Unfade"}
                     className="flex items-center gap-1 px-1.5 py-0.5 rounded hairline border text-[11px] bg-[var(--panel)] hover:border-[var(--ink)]">
                     <span className="line-through text-[var(--dim)]">{byId.get(id)?.name ?? id}</span>
+                    {fromPool && <span className="text-[9px] uppercase tracking-wider text-[var(--mute)]">Pool</span>}
                     <span className="text-[var(--dim)]">✕</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
         </div>
@@ -351,7 +370,8 @@ export default function Builder() {
             </thead>
             <tbody>
               {options.map((p) => {
-                const faded = fades.has(p.player_id);
+                const faded = allFades.has(p.player_id);
+                const fromPool = poolFades.has(p.player_id);
                 return (
                 <tr key={p.player_id} onClick={() => pick(p.player_id)}
                   className={`border-b hairline hover:bg-[var(--raised)] cursor-pointer ${faded ? "[&>td:nth-child(n+3)]:opacity-40" : ""}`}>
@@ -360,7 +380,8 @@ export default function Builder() {
                   </td>
                   <td className="px-2 py-1 w-12">
                     <button onClick={(e) => { e.stopPropagation(); toggleFade(p.player_id); }}
-                      title={faded ? "Unfade" : "Fade: the optimizer skips this player"}
+                      title={fromPool ? "Excluded in Pool. Click to remove the Pool exclude."
+                        : faded ? "Unfade" : "Fade: the optimizer skips this player"}
                       className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border
                         ${faded ? "border-[var(--ink)] text-[var(--ink)]" : "hairline text-[var(--dim)] hover:text-[var(--ink)]"}`}>
                       {faded ? "Faded" : "Fade"}
